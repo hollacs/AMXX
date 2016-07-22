@@ -5,24 +5,26 @@
 #include <hamsandwich>
 #include <xs>
 
+#include <zombiemode>
+
 #define VERSION "0.1"
 
 #define WEAPON_CODE 23895
-#define WEAPON_CLASS "weapon_xm1014"
-#define WEAPON_EVENT "events/xm1014.sc"
-#define WEAPON_ID CSW_XM1014
-#define WEAPON_MAXCLIP 10
-#define WEAPON_DEFAULT_GIVE 10
-#define WEAPON_MAXSPEED 250.0
-#define WEAPON_MAXSPEED_ZOOM 230.0
-#define WEAPON_DAMAGE 30.0
+#define WEAPON_CLASS "weapon_m4a1"
+#define WEAPON_EVENT "events/m4a1.sc"
+#define WEAPON_ID CSW_M4A1
+#define WEAPON_MAXCLIP 30
+#define WEAPON_DEFAULT_GIVE 30
+#define WEAPON_MAXSPEED 235.0
+#define WEAPON_MAXSPEED_ZOOM 220.0
+#define WEAPON_DAMAGE 40.0
 
-#define WEAPON_ATTACK_TIME 0.3
+#define WEAPON_ATTACK_TIME 0.09
 #define WEAPON_ATTACK_ANIM_TIME 2.0 
-#define WEAPON_ATTACK_TIME_ZOOM 0.35
-#define WEAPON_RELOAD_DELAY 0.6
+#define WEAPON_ATTACK_TIME_ZOOM 0.15
+#define WEAPON_RELOAD_DELAY 3.25
 
-//#define REMOVE_SECONDARY_ATTACK
+#define REMOVE_SECONDARY_ATTACK
 
 #define DEFAULT_FOV 90
 
@@ -32,29 +34,25 @@
 enum
 {
 	ANIM_IDLE,
-	ANIM_SHOOT1,
-	ANIM_SHOOT2,
-	ANIM_INSERT,
 	ANIM_RELOAD,
-	ANIM_START_RELOAD,
-	ANIM_DRAW
+	ANIM_DRAW,
+	ANIM_SHOOT1,
+	ANIM_SHOOT2
 };
 
 // Set animation id
 const WEAPON_ANIM_IDLE = ANIM_IDLE;
 const WEAPON_ANIM_DRAW = ANIM_DRAW;
 const WEAPON_ANIM_RELOAD = ANIM_RELOAD;
-const WEAPON_ANIM_START_RELOAD = ANIM_START_RELOAD;
-const WEAPON_ANIM_PUMP = ANIM_INSERT;
 new const WEAPON_ANIM_SHOOT[] = {ANIM_SHOOT1, ANIM_SHOOT2}
 
 // Models
-new const MODEL_W[] = "models/w_xm1014.mdl";
-new const MODEL_V[] = "models/v_balrog11_2.mdl";
-new const MODEL_P[] = "models/p_xm1014.mdl";
+new const MODEL_W[] = "models/fai_zombie/weapons/w_ar15.mdl";
+new const MODEL_V[] = "models/fai_zombie/weapons/v_ar15.mdl";
+new const MODEL_P[] = "models/fai_zombie/weapons/p_ar15.mdl";
 
 // Sound
-new const SOUND_FIRE[][] = {"weapons/awp1.wav"};
+new const SOUND_FIRE[][] = {"weapons/tar21-1.wav", "weapons/tar21-2.wav"};
 
 // Variables
 new g_eventId;
@@ -66,6 +64,8 @@ new Float:g_punchAngle[3];
 new Trie:g_classNames;
 new g_fnPrecacheEvent;
 
+new g_itemId;
+
 // Functions
 public plugin_precache()
 {
@@ -73,12 +73,16 @@ public plugin_precache()
 	precache_model(MODEL_V);
 	precache_model(MODEL_P);
 	
-	precache_sound("weapons/zoom.wav");
+	//precache_sound("weapons/zoom.wav");
 	
 	for (new i = 0; i < sizeof SOUND_FIRE; i++)
 		precache_sound(SOUND_FIRE[i]);
 	
 	// Precache other sound here
+	precache_sound("weapons/ar15_boltback.wav");
+	precache_sound("weapons/ar15_boltfwd.wav");
+	precache_sound("weapons/ar15_magin.wav");
+	precache_sound("weapons/ar15_magout.wav");
 	
 	g_classNames = TrieCreate();
 	
@@ -115,7 +119,9 @@ public OnPrecacheEvent_Post(type, const name[])
 
 public plugin_init()
 {
-	register_plugin("New Gun", VERSION, "Colgate");
+	register_plugin("[ZB] Extra: AR15", VERSION, "Colgate");
+	
+	g_itemId = zb_register_extra_item("AR 15", 35, 7, ZB_TEAM_HUMAN);
 	
 	unregister_forward(FM_PrecacheEvent, g_fnPrecacheEvent, 1);
 	register_forward(FM_SetModel, "OnSetModel_Post", 1);
@@ -132,13 +138,15 @@ public plugin_init()
 	RegisterHam(Ham_Weapon_PrimaryAttack, WEAPON_CLASS, "OnWeaponPrimaryAttack");
 	RegisterHam(Ham_Weapon_PrimaryAttack, WEAPON_CLASS, "OnWeaponPrimaryAttack_Post", 1);
 	RegisterHam(Ham_Weapon_SecondaryAttack, WEAPON_CLASS, "OnWeaponSecondaryAttack");
-	
-	register_clcmd("newgun2", "CmdNewGun");
 }
 
-public CmdNewGun(id)
+public zb_extra_item_selected(id, itemId)
 {
-	giveWeapon(id);
+	if (itemId == g_itemId)
+	{
+		dropSlotItems(id, 1);
+		giveWeapon(id);
+	}
 }
 
 public OnSetModel_Post(ent, const model[])
@@ -345,13 +353,15 @@ public OnWeaponPrimaryAttack_Post(ent)
 	velocity[2] = 0.0;
 	
 	if (xs_vec_len(velocity) > 0.0)
-		kickBack(ent, 1.0, 0.45, 0.275, 0.05, 4.0, 2.5, 7);
+		kickBack(ent, 1.0, 0.45, 0.28, 0.045, 3.75, 3.0, 7);
 	else if (~pev(player, pev_flags) & FL_ONGROUND)
-		kickBack(ent, 1.25, 0.45, 0.22, 0.18, 5.5, 4.0, 5);
+		kickBack(ent, 1.2, 0.5, 0.23, 0.15, 5.5, 3.5, 6);
 	else if (pev(player, pev_flags) & FL_DUCKING)
-		kickBack(ent, 0.575, 0.325, 0.2, 0.011, 3.25, 2.0, 8);
+		kickBack(ent, 0.6, 0.3, 0.2, 0.0125, 3.25, 2.0, 7);
 	else
-		kickBack(ent, 0.7, 0.4, 0.3, 0.1, 3.2, 4.0, 8);
+		kickBack(ent, 0.60, 0.30, 0.24, 0.014, 3.6, 2.3, 7);
+	
+	//kickBack(ent, Float:upBase, Float:lateralBase, Float:upModifier, Float:lateralModifier, Float:upMax, Float:lateralMax, directionChange)
 	
 #endif
 }
@@ -405,10 +415,6 @@ public OnWeaponReload_Post(ent)
 		// Change reload time
 		set_ent_data_float(player, "CBaseMonster", "m_flNextAttack", WEAPON_RELOAD_DELAY);
 		setWeaponDataF(ent, "m_flTimeWeaponIdle", WEAPON_RELOAD_DELAY + 0.5);
-		
-		// Reset FOV
-		setPlayerData(player, "m_iFOV", DEFAULT_FOV);
-		set_pev(player, pev_fov, DEFAULT_FOV);
 	}
 }
 
@@ -456,7 +462,7 @@ stock giveWeapon(id)
 		
 		set_pev(ent, pev_origin, origin);
 		set_pev(ent, pev_spawnflags, pev(ent, pev_spawnflags) | SF_NORESPAWN);
-		set_pev(ent, pev_iuser1, WEAPON_CODE);
+		set_pev(ent, pev_iuser4, WEAPON_CODE);
 		
 		DispatchSpawn(ent);
 		fake_touch(ent, id);
@@ -465,7 +471,7 @@ stock giveWeapon(id)
 
 stock bool:isNewWeapon(ent)
 {
-	return pev(ent, pev_iuser1) == WEAPON_CODE;
+	return pev(ent, pev_iuser4) == WEAPON_CODE;
 }
 
 stock kickBack(ent, Float:upBase, Float:lateralBase, Float:upModifier, Float:lateralModifier, Float:upMax, Float:lateralMax, directionChange)
@@ -565,6 +571,11 @@ stock setPlayerData(ent, const member[], value, element = 0)
 	set_ent_data(ent, "CBasePlayer", member, value, element);
 }
 
+stock getPlayerDataEnt(player, const member[], element = 0)
+{
+	return get_ent_data_entity(player, "CBasePlayer", member, element);
+}
+
 stock setPlayerDataF(ent, const member[], Float:value, element = 0)
 {
 	set_ent_data_float(ent, "CBasePlayer", member, value, element);
@@ -598,4 +609,29 @@ stock getWeaponDataEnt(ent, const member[], element = 0)
 stock setWeaponDataEnt(ent, const member[], value, element = 0)
 {
 	set_ent_data_entity(ent, "CBasePlayerWeapon", member, value, element);
+}
+
+stock dropSlotItems(id, slot=0)
+{
+	for (new i = 1; i <= 5; i++)
+	{
+		if (slot && slot != i)
+			continue;
+		
+		new weapon = getPlayerDataEnt(id, "m_rgpPlayerItems", i);
+		
+		while (pev_valid(weapon))
+		{
+			if (ExecuteHamB(Ham_CS_Item_CanDrop, weapon))
+			{
+				static class[32];
+				pev(weapon, pev_classname, class, charsmax(class));
+				
+				engclient_cmd(id, "drop", class);
+			}
+			
+			// Find next weapon
+			weapon = get_ent_data_entity(weapon, "CBasePlayerItem", "m_pNext");
+		}
+	}
 }

@@ -209,9 +209,9 @@ public MakeMapVote()
 	// Play sound
 	remove_task(TASK_VOTE);
 	set_task(1.0, "ShowMapVote", TASK_VOTE, _, _, "a", 7);
-	set_task(7.0, "CheckMapVotes", TASK_VOTE);
+	set_task(6.0, "CheckMapVotes", TASK_VOTE);
 	
-	g_countDown = 7;
+	g_countDown = 5;
 }
 
 public ShowMapVote()
@@ -305,7 +305,7 @@ public CheckMapVotes()
 		
 		remove_task(TASK_VOTE);
 		set_task(1.0, "ShowMapVote", TASK_VOTE, _, _, "a", 15);
-		set_task(15.0, "CheckMapVotes", TASK_VOTE);
+		set_task(16.0, "CheckMapVotes", TASK_VOTE);
 		
 		g_countDown = 15;
 		return;
@@ -336,7 +336,7 @@ public CheckMapVotes()
 	if (num > 1)
 	{
 		best = sameVotes[random(num)];
-		client_print(0, print_chat, "由於有 %d 個投票結果相同, 所以隨機選擇了其中一個.", num);
+		client_print(0, print_chat, "由於有 %d 個結果相同, 所以隨機選擇了其中一個.", num);
 	}
 	
 	new mapName[32];
@@ -350,7 +350,7 @@ public CheckMapVotes()
 		if (get_timeleft() < 130)
 			set_cvar_float("mp_timelimit", get_cvar_float("mp_timelimit") + get_pcvar_float(CvarExtendStep));
 		
-		client_print(0, print_chat, "投票結束. %s 將會延續 %d 分鐘.", mapName, get_pcvar_num(CvarExtendStep));
+		client_print(0, print_chat, "投票結束. %s 將會延長 %d 分鐘.", mapName, get_pcvar_num(CvarExtendStep));
 	}
 	else
 	{
@@ -359,7 +359,7 @@ public CheckMapVotes()
 		set_cvar_string("amx_nextmap", mapName);
 		set_task(10.0, "changeLevel", TASK_VOTE);
 		
-		client_print(0, print_chat, "投票結束. 下一張地圖將會是 %s.", mapName);
+		client_print(0, print_chat, "投票結束. 下一個地圖將會是 %s.", mapName);
 	}
 }
 
@@ -370,7 +370,7 @@ public changeLevel()
 	
 	new mapName[32];
 	get_cvar_string("amx_nextmap", mapName, charsmax(mapName));
-	client_print(0, print_chat, "正在更換地圖 %s.", mapName);
+	client_print(0, print_chat, "正在更換地圖 %s...", mapName);
 }
 
 loadConfigs()

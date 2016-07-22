@@ -3,21 +3,22 @@
 
 new Array:g_announce;
 new g_announceCount;
-
 new g_announceId;
+
+new cvarDelayMin, cvarDelayMax;
 
 public plugin_init()
 {
 	register_plugin("Announce", "0.1", "Colgate");
 	
-	new cvarDelay = register_cvar("announce_delay", "60.0");
+	cvarDelayMin = register_cvar("announce_delay_min", "20.0");
+	cvarDelayMax = register_cvar("announce_delay_max", "70.0");
 	
 	g_announce = ArrayCreate(192);
-	g_announceId = random(g_announceCount);
-	
 	readConfigs();
 	
-	set_task(get_pcvar_float(cvarDelay), "Announce", .flags="b");
+	g_announceId = random(g_announceCount);
+	set_task(random_float(get_pcvar_float(cvarDelayMin), get_pcvar_float(cvarDelayMax)), "Announce");
 }
 
 public Announce()
@@ -29,8 +30,10 @@ public Announce()
 	ArrayGetString(g_announce, g_announceId, message, charsmax(message));
 	
 	client_print_color(0, print_team_default, message);
-	
 	g_announceId++;
+	
+	remove_task();
+	set_task(random_float(get_pcvar_float(cvarDelayMin), get_pcvar_float(cvarDelayMax)), "Announce");
 }
 
 readConfigs()
