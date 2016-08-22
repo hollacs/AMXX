@@ -2,7 +2,7 @@
 #include <amxmisc>
 
 #define MAX_NOMINATIONS 4
-#define MAX_MAPS_IN_VOTE 8
+#define MAX_MAPS_IN_VOTE 6
 #define ID_EXTEND MAX_MAPS_IN_VOTE
 #define NULL -1
 
@@ -72,7 +72,7 @@ public CmdSay(id)
 	new arg1[32], arg2[32];
 	parse(arg, arg1, charsmax(arg1), arg2, charsmax(arg2));
 	
-	new mapId = ArrayFindString(g_mapName, arg1);
+	new mapId = arrayFindString(g_mapName, arg1);
 	if (mapId != NULL)
 	{
 		nominateMap(id, mapId);
@@ -83,7 +83,7 @@ public CmdSay(id)
 		ShowNominationMenu(id, arg2);
 		return PLUGIN_HANDLED;
 	}
-	else if (equal(arg1, "/rtv") || equal(arg1, "/rockthevote"))
+	else if (equal(arg1, "rtv") || equal(arg1, "rockthevote"))
 	{
 		rockTheVote(id);
 		return PLUGIN_HANDLED;
@@ -477,7 +477,22 @@ stock bool:isMapInMenu(map)
 
 stock bool:isMapExists(const map[])
 {
-	return (ArrayFindString(g_mapName, map) != NULL);
+	return (arrayFindString(g_mapName, map) != NULL);
+}
+
+stock arrayFindString(Array:which, const string[])
+{
+	new size = ArraySize(which);
+	for (new i = 0; i < size; i++)
+	{
+		static buffer[128];
+		ArrayGetString(g_mapName, i, buffer, charsmax(buffer));
+		
+		if (equal(string, buffer))
+			return i;
+	}
+	
+	return -1;
 }
 
 stock bool:isMapNominated(map)
