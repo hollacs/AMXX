@@ -23,12 +23,13 @@ new g_wayType[MAX_POINTS];
 new g_wayCount;
 
 new g_editor;
-new Float:g_radius;
+new Float:g_range;
 new g_type;
 new g_auto;
 new Float:g_autoDist;
 
 new g_currentPoint;
+new g_aimPoint;
 
 new g_sprBeam1, g_sprBeam4, g_sprArrow;
 
@@ -59,9 +60,10 @@ public ShowWayPointMenu(id)
 	new text[64];
 	new menu = menu_create("Waypoint Menu", "HandleWayPointMenu");
 	
-	menu_additem(menu, "Waypoint type: \y%s", WAYPOINT_TYPES[g_type]);
+	formatex(text, charsmax(text), "Waypoint type:\y %s", WAYPOINT_TYPES[g_type]);
+	menu_additem(menu, text);
 	
-	formatex(text, charsmax(text), "Waypoint range: \y%.f", g_radius);
+	formatex(text, charsmax(text), "Waypoint range:\y %.f", g_range);
 	menu_additem(menu, text);
 	
 	menu_additem(menu, "Create point");
@@ -71,8 +73,7 @@ public ShowWayPointMenu(id)
 	menu_additem(menu, "Remove path");
 	menu_additem(menu, "Edit point");
 	
-	new text[32];
-	formatex(text, charsmax(text), "Auto waypoint: %s", g_autoMode ? "\yOn" : "\dOff");
+	formatex(text, charsmax(text), "Auto waypoint: %s", g_auto ? "\yOn" : "\dOff");
 	menu_additem(menu, text);
 	
 	formatex(text, charsmax(text), "Auto waypoint distance: %.f", g_autoDist);
@@ -105,12 +106,16 @@ public HandleWayPointMenu(id, menu, item)
 		{
 			ShowTypeMenu(id);
 		}
+		case 1:
+		{
+			ShowRangeMenu(id);
+		}
 		case 2:
 		{
 			new Float:origin[3];
 			pev(id, pev_origin, origin);
 			
-			new point = createPoint(origin, g_radius, g_type);
+			new point = createPoint(origin, g_range, g_type);
 			if (point == NULL)
 				client_print(0, print_chat, "You cannot create more points.");
 			else
@@ -143,7 +148,50 @@ public ShowTypeMenu(id)
 	menu_display(id, menu);
 }
 
-public HandleTypeMenu(id)
+public HandleTypeMenu(id, menu, item)
+{
+	menu_destroy(menu);
+	
+	if (item == MENU_EXIT || g_editor != id)
+		return;
+	
+	g_type = item;
+	ShowWayPointMenu(id);
+}
+
+public ShowRangeMenu(id)
+{
+	new menu = menu_create("Waypoint Range", "HandleRangeMenu");
+	
+	new range = 0;
+	while (range <= 200)
+	{
+		static text[32], info[6];
+		formatex(text, charsmax(text), "%d", range);
+		num_to_str(range, info, charsmax(info));
+		menu_additem(menu, text, info)
+		range += 20;
+	}
+	
+	menu_setprop(menu, MPROP_NUMBER_COLOR, "\y");
+	menu_display(id, menu);
+}
+
+public HandleRangeMenu(id, menu, item)
+{
+	if (item == MENU_EXIT || g_editor != id)
+	{
+		menu_destroy(menu);
+		return;
+	}
+	
+	new info[6], dummy;
+	menu_item_getinfo(menu, item, dummy, info, charsmax(info), _, _, dummy);
+	menu_destroy(menu);
+	
+	g_range = str_to_float(info);
+	ShowWayPointMenu(id);
+}
 
 public DrawWaypoints()
 {
@@ -195,22 +243,38 @@ public DrawWaypoints()
 					g_sprBeam4, .life=5, .width=20, .color={255, 0, 0}, .alpha=255);
 			
 			// draw paths
-			for (new j = 0; j < MAX_PATHS; j++)
+			for (new i = 0; i < MAX_PATHS; i++)
 			{
-				new p = g_wayPaths[index][j];
+				new p = g_wayPaths[index][i];
 				if (p == NULL)
 					continue;
 				
 				// two-way path
 				if (getWayPath(p, index))
 					drawLine2(g_editor, g_wayPoint[index], g_wayPoint[p],
-						g_sprBeam1, .life=5, .width=10, .noise=3, .color={200, 100, 0}, .alpha=255);
+							g_sprBeam1, .life=5, .width=10, .noise=3, .color={200, 100, 0}, .alpha=255);
 				// one-way path
 				else
 					drawLine2(g_editor, g_wayPoint[index], g_wayPoint[p],
-						g_sprBeam1, .life=5, .width=10, .noise=3, .color={255, 0, 0}, .alpha=255);
+							g_sprBeam1, .life=5, .width=10, .noise=3, .color={255, 0, 0}, .alpha=255);
 				
 				drawCount++;
+			}
+			
+			// draw circle
+			new Float:polygon[8][3];
+			for (new i = 1; i <= 8; i++)
+			{
+				new j = i-1;
+				polygon[j][0] = floatcos(360 / 8 * float(i) - 180.0, degrees) * g_wayRange[index] + g_wayPoint[index][0];
+				polygon[j][1] = floatsin(360 / 8 * float(i) - 180.0, degrees) * g_wayRange[index] + g_wayPoint[index][1];
+				polygon[j][2] = g_wayPoint[index][2] - 16.0;
+			}
+			
+			for (new i = 0, j = 8-1; i < 8; j=i++)
+			{
+				drawLine2(g_editor, polygon[i], polygon[j],
+						g_sprBeam4, .life=5, .width=10, .color={200, 0, 0}, .alpha=255);
 			}
 		}
 		else
@@ -222,7 +286,7 @@ public DrawWaypoints()
 		}
 		
 		// add to drawn bits
-		setBits(drwan, index);
+		setBits(drawn, index);
 		drawCount++;
 		
 		// swap space
@@ -231,6 +295,13 @@ public DrawWaypoints()
 			pointIndexs[min] = pointIndexs[i];
 			pointDists[min] = pointDists[i];
 		}
+	}
+	
+	g_aimPoint = getAimPoint(g_editor, drawn);
+	if (g_aimPoint > NULL)
+	{
+		drawLine2(g_editor, origin, g_wayPoint[g_aimPoint],
+				g_sprArrow, .life=5, .width=20, .color={200, 200, 200}, .alpha=255);
 	}
 }
 
@@ -242,7 +313,7 @@ stock bool:isPointValid(point)
 	return true;
 }
 
-stock createPoint(Float:origin[3], Float:range)
+stock createPoint(Float:origin[3], Float:range, type)
 {
 	new index = g_wayCount;
 	if (index >= MAX_POINTS)
@@ -250,6 +321,7 @@ stock createPoint(Float:origin[3], Float:range)
 	
 	g_wayPoint[index] = origin;
 	g_wayRange[index] = range;
+	g_wayType[index] = type;
 	arrayset(g_wayPaths[index], NULL, MAX_PATHS);
 	
 	g_wayCount++;
@@ -304,6 +376,82 @@ stock findClosestPoint(Float:origin[3], Float:distance=9999.0)
 	}
 	
 	return point;
+}
+
+stock getAimPoint(ent, points[MAX_POINTS >> 5], Float:distance=9999.0)
+{
+	new Float:start[3], Float:end[3];
+	pev(ent, pev_origin, start);
+	
+	pev(ent, pev_view_ofs, end);
+	xs_vec_add(start, end, start);
+	
+	velocity_by_aim(ent, 9999, end);
+	xs_vec_add(end, start, end);
+	
+	new min = NULL;
+	new Float:minDist = distance;
+	new Float:pos[3], Float:pos2[3];
+	new Float:fuck[3], Float:fuck2[3];
+	
+	for (new i = 0; i < g_wayCount; i++)
+	{
+		if (!getBits(points, i))
+			continue;
+		
+		distPointSegment(g_wayPoint[i], start, end, pos);
+		
+		start = g_wayPoint[i];
+		end = g_wayPoint[i];
+		start[2] -= 32.0;
+		end[2] += 32.0;
+		
+		new Float:dist = distPointSegment(pos, start, end, pos2);
+		if (dist < minDist)
+		{
+			min = i;
+			minDist = dist;
+			fuck = pos;
+			fuck2 = pos2;
+		}
+	}
+	
+	if (min > NULL)
+	{
+		drawLine2(g_editor, fuck, fuck2,
+				g_sprBeam4, .life=5, .width=20, .color={200, 200, 200}, .alpha=255);
+	}
+	
+	return min;
+}
+
+stock Float:distPointSegment(Float:p[3], Float:sp1[3], Float:sp2[3], Float:output[3])
+{
+	new Float:v[3], Float:w[3];
+	xs_vec_sub(sp2, sp1, v);
+	xs_vec_sub(p, sp1, w);
+	
+	new Float:c1 = xs_vec_dot(w, v);
+	if (c1 <= 0)
+	{
+		output = sp1;
+		return get_distance_f(p, sp1);
+	}
+	
+	new Float:c2 = xs_vec_dot(v, v);
+	if (c2 <= c1)
+	{
+		output = sp2;
+		return get_distance_f(p, sp2);
+	}
+	
+	new Float:b = c1 / c2;
+	new Float:pB[3];
+	xs_vec_mul_scalar(v, b, pB);
+	xs_vec_add(sp1, pB, pB);
+	
+	output = pB;
+	return get_distance_f(p, pB);
 }
 
 stock drawLine(id, Float:x1, Float:y1, Float:z1, Float:x2, Float:y2, Float:z2, 
