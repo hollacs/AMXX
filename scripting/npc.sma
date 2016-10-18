@@ -3,54 +3,187 @@
 #include <fakemeta>
 #include <xs>
 
+#define NULL -1
+
+#define ANIM_IDLE 1
+#define ANIM_RUN 4
+
+native Array:wp_aStar(start, goal);
+native wp_getOrigin(point, Float:origin[3]);
+native Float:wp_getRange(point);
+native wp_findClosestPoint(Float:origin[3], Float:distance=999999.0);
+native Float:wp_distPointSegment(Float:p[3], Float:sp1[3], Float:sp2[3], Float:output[3]);
+native Float:wp_findClosestPointBetweenPaths(Float:origin[3], path[2], Float:output[3]);
+
 new g_follow;
 
-native Array:node_dijkstra(start, goal);
-native node_find_closest(Float:origin[3], Float:distance);
-native node_get_origin(node, Float:origin[3]);
-
-public plugin_init()
-{
-	register_plugin("NPC", "0.1", "Colgate");
-	
-	register_clcmd("say /zombie", "cmdZombie");
-	register_clcmd("say /follow", "cmdFollow");
-	
-	register_think("monster_test", "thinkMonster");
-}
+new g_sprBeam4;
 
 public plugin_precache()
 {
-	precache_model("models/zombie.mdl");
+	g_sprBeam4 = precache_model("sprites/zbeam4.spr");
 }
 
-public cmdZombie(id)
+public plugin_init()
+{
+	register_plugin("NPC", "0.1", "penguinux");
+	
+	register_clcmd("create_npc", "CmdCreateNpc");
+	register_clcmd("npc_follow", "CmdNpcFollow");
+	
+	register_think("npc_test", "ThinkNpc");
+	
+	register_forward(FM_AddToFullPack, "OnAddToFullPack_Post", 1);
+}
+
+public CmdCreateNpc(id)
 {
 	new Float:origin[3];
-	pev(id, pev_origin, origin);
+	entity_get_vector(id, EV_VEC_origin, origin);
 	origin[2] += 80.0;
 	
 	new ent = create_entity("info_target");
+	if (is_valid_ent(ent))
+	{
+		entity_set_string(ent, EV_SZ_classname, "npc_test");
+		
+		entity_set_model(ent, "models/player/vip/vip.mdl");
+		entity_set_size(ent, Float:{-16.0, -16.0, -36.0}, Float:{16.0, 16.0, 36.0});
+		entity_set_origin(ent, origin);
+		
+		entity_set_float(ent, EV_FL_takedamage, DAMAGE_YES);
+		entity_set_float(ent, EV_FL_health, 100.0);
+		
+		entity_set_int(ent, EV_INT_gamestate, 1);
+		entity_set_int(ent, EV_INT_deadflag, DEAD_NO);
+		entity_set_int(ent, EV_INT_solid, SOLID_SLIDEBOX);
+		entity_set_int(ent, EV_INT_movetype, MOVETYPE_STEP);
+		
+		entity_set_int(ent, EV_INT_iuser1, NULL);
+		
+		// animating
+		entity_set_int(ent, EV_INT_sequence, ANIM_IDLE);
+		entity_set_float(ent, EV_FL_animtime, get_gametime());
+		entity_set_float(ent, EV_FL_framerate, 1.0);
+		
+		entity_set_float(ent, EV_FL_nextthink, get_gametime() + 0.1);
+	}
+}
+
+public CmdNpcFollow(id)
+{
+	if (g_follow)
+	{
+		g_follow = 0;
+		client_print(id, print_chat, "NPC stop following.");
+	}
+	else
+	{
+		g_follow = id;
+		client_print(id, print_chat, "NPC will follow %n.", id);
+	}
+}
+
+public ThinkNpc(npc)
+{
+	if (g_follow)
+	{
+		new Float:target[3];
+		new Float:origin[3], Float:origin2[3];
+		pev(npc, pev_origin, origin);
+		pev(g_follow, pev_origin, origin2);
+		
+		if (get_gametime() >= entity_get_float(npc, EV_FL_ltime) + 0.25)
+		{
+			new start = entity_get_int(npc, EV_INT_iuser1);
+			if (start == NULL)
+				start = wp_findClosestPoint(origin);
+			else
+			{
+				new Float:origin3[3];
+				wp_getOrigin(start, origin3);
+				
+				if (get_distance_f(origin, origin3) > 350)
+					start = wp_findClosestPoint(origin);
+			}
+			
+			new goal = wp_findClosestPoint(origin2);
+			
+			new Array:path = wp_aStar(start, goal);
+			if (path != Invalid_Array)
+			{
+				new size = ArraySize(path);
+				if (size <= 2)
+				{
+					target = origin2;
+					entity_set_int(npc, EV_INT_iuser1, NULL);
+				}
+				else
+				{
+					new p = ArrayGetCell(path, 1);
+
+					new Float:origin3[3];
+					wp_getOrigin(p, origin3);
+					
+					if (get_distance_f(origin, origin3) <= wp_getRange(p))
+					{
+						entity_set_int(npc, EV_INT_iuser1, p);
+					}
+					
+					target = origin3;
+				}
+				
+				ArrayDestroy(path);
+			}
+			
+			entity_set_vector(npc, EV_VEC_oldorigin, target);
+			entity_set_float(npc, EV_FL_ltime, get_gametime());
+		}
+		
+		entity_get_vector(npc, EV_VEC_oldorigin, target);
+		
+		new Float:steering[3];
+		xs_vec_add(steering, seek(npc, target, 200.0), steering);
+		
+		new Float:avelocity[3];
+		pev(npc, pev_avelocity, avelocity);
+		
+		truncate(steering, 10.0);
+		xs_vec_div_scalar(steering, 2.5, steering);
+		xs_vec_add(avelocity, steering, avelocity);
+		truncate(avelocity, 200.0);
+		
+		new Float:velocity[3];
+		pev(npc, pev_velocity, velocity);
+		
+		velocity[0] = avelocity[0];
+		velocity[1] = avelocity[1];
+		
+		set_pev(npc, pev_velocity, velocity);
+		set_pev(npc, pev_avelocity, velocity);
+		
+		new Float:angles[3];
+		vector_to_angle(avelocity, angles);
+		angles[0] = 0.0;
+		set_pev(npc, pev_angles, angles);
+		
+		engfunc(EngFunc_MoveToOrigin, npc, target, 0.1, MOVE_STRAFE);
+		
+		if (xs_vec_len(velocity) > 1)
+			entity_set_int(npc, EV_INT_sequence, ANIM_RUN);
+		else
+			entity_set_int(npc, EV_INT_sequence, ANIM_IDLE);
+	}
 	
-	entity_set_model(ent, "models/zombie.mdl");
-	entity_set_size(ent, Float:{-16.0, -16.0, 0.0}, Float:{16.0, 16.0, 72.0});
-	entity_set_origin(ent, origin);
-	
-	set_pev(ent, pev_endpos, origin);
-	
-	set_pev(ent, pev_classname, "monster_test");
-	
-	set_pev(ent, pev_takedamage, DAMAGE_YES);
-	set_pev(ent, pev_health, 100.0);
-	set_pev(ent, pev_solid, SOLID_SLIDEBOX);
-	set_pev(ent, pev_movetype, MOVETYPE_PUSHSTEP);
-	set_pev(ent, pev_flags, pev(ent, pev_flags) | FL_MONSTER);
-	
-	set_pev(ent, pev_sequence, 11);
-	set_pev(ent, pev_animtime, 2.0);
-	set_pev(ent, pev_framerate, 1.0);
-	
-	set_pev(ent, pev_nextthink, get_gametime() + 0.1);
+	entity_set_float(npc, EV_FL_nextthink, get_gametime() + 0.01);
+}
+
+public OnAddToFullPack_Post(es, e, ent, host, flags, player, pset)
+{
+	if (get_es(es, ES_MoveType) == MOVETYPE_STEP)
+	{
+		set_es(es, ES_MoveType, MOVETYPE_PUSHSTEP);
+	}
 }
 
 public client_disconnected(id)
@@ -59,106 +192,70 @@ public client_disconnected(id)
 		g_follow = 0;
 }
 
-public cmdFollow(id)
+stock findClosestLine(Float:origin[3], Array:path, indexes[2], Float:output[3])
 {
-	g_follow = id;
-}
-
-public thinkMonster(npc)
-{
-	new Float:currentTime = get_gametime();
+	new size = ArraySize(path);
+	if (size < 2)
+		return false;
 	
-	if (g_follow)
+	new Float:minDist = 999999.0;
+	
+	for (new i = 0; i < (size-1); i++)
 	{
-		new Float:start[3], Float:end[3];
-		pev(npc, pev_origin, start);
-		pev(g_follow, pev_origin, end);
+		new p1 = ArrayGetCell(path, i);
+		new p2 = ArrayGetCell(path, i+1);
 		
-		new source = node_find_closest(start, 9999.0);
-		new target = node_find_closest(end, 9999.0);
+		new Float:origin1[3], Float:origin2[3];
+		wp_getOrigin(p1, origin1);
+		wp_getOrigin(p2, origin2);
 		
-		new Float:source_origin[3], Float:target_origin[3];
-		node_get_origin(source, source_origin);
-		node_get_origin(target, target_origin);
-		
-		if (isPathReachable(npc, source_origin, target_origin) && isPathReachable(npc, start, target_origin) && isPathReachable(npc, start, end))
+		new Float:origin3[3];
+		new Float:dist = wp_distPointSegment(origin, origin1, origin2, origin3);
+		if (dist < minDist)
 		{
-			set_pev(npc, pev_endpos, start);
+			indexes[0] = i;
+			indexes[1] = i+1;
+			output = origin3;
+			minDist = dist;
 		}
-		else
-		{
-			new Float:origin[3], Float:oldorigin[3];
-			pev(npc, pev_endpos, origin);
-			pev(npc, pev_oldorigin, oldorigin);
-			
-			if (!xs_vec_equal(start, oldorigin))
-			{
-				set_pev(npc, pev_ltime, currentTime);
-			}
-			
-			new Float:timeStuck;
-			pev(npc, pev_ltime, timeStuck);
-			set_pev(npc, pev_oldorigin, start);
-			
-			if (timeStuck + 5.0 >= currentTime || get_distance_f(start, origin) <= 64.0)
-			{
-				new Array:path = node_dijkstra(source, target);
-				
-				if (path != Invalid_Array)
-				{
-					new size = ArraySize(path);
-					new node = ArrayGetCell(path, (size > 1) ? (size - 2) : 0);
-					
-					node_get_origin(node, origin);
-					set_pev(npc, pev_endpos, origin);
-				}
-			}
-			
-			end = origin;
-		}
-		
-		new Float:steering[3];
-		xs_vec_add(steering, seek(npc, end), steering);
-		//xs_vec_add(steering, separation(ent, 75.0), steering);
-		
-		new Float:velocity[3];
-		pev(npc, pev_avelocity, velocity);
-		
-		truncate(steering, 50.0);
-		xs_vec_add(velocity, steering, velocity);
-		truncate(velocity, 220.0);
-		
-		// set velocity
-		new Float:old_velocity[3];
-		pev(npc, pev_velocity, old_velocity);
-		old_velocity[0] = velocity[0];
-		old_velocity[1] = velocity[1];
-		
-		set_pev(npc, pev_velocity, old_velocity);
-		set_pev(npc, pev_avelocity, old_velocity);
-		
-		// set angles
-		new Float:angles[3];
-		vector_to_angle(velocity, angles);
-		angles[0] = 0.0;
-		
-		set_pev(npc, pev_angles, angles);
-		
-		engfunc(EngFunc_WalkMove, npc, angles[1], 1.0, WALKMOVE_NORMAL);
 	}
 	
-	set_pev(npc, pev_nextthink, currentTime + 0.1);
+	return true;
 }
 
-stock truncate(Float:vector[3], Float:max)
+stock drawLine(id, Float:x1, Float:y1, Float:z1, Float:x2, Float:y2, Float:z2, 
+	sprite, frame=0, rate=0, life=10, width=10, noise=0, color[3]={255,255,255}, alpha=127, scroll=0)
 {
-	new Float:i;
-	i = max / vector_length(vector);
-	i = (i < 1.0) ? i : 1.0;
-	xs_vec_mul_scalar(vector, i, vector)
+	message_begin(id ? MSG_ONE_UNRELIABLE : MSG_BROADCAST, SVC_TEMPENTITY, _, id);
+	write_byte(TE_BEAMPOINTS);
+	write_coord_f(x1);
+	write_coord_f(y1);
+	write_coord_f(z1);
+	write_coord_f(x2);
+	write_coord_f(y2);
+	write_coord_f(z2);
+	write_short(sprite);
+	write_byte(frame);
+	write_byte(rate);
+	write_byte(life);
+	write_byte(width);
+	write_byte(noise);
+	write_byte(color[0]);
+	write_byte(color[1]);
+	write_byte(color[2]);
+	write_byte(alpha);
+	write_byte(scroll);
+	message_end();
 }
 
-stock Float:seek(ent, Float:target[3])
+stock drawLine2(id, Float:start[3], Float:end[3], sprite, frame=0, rate=0, life=10,
+	width=10, noise=0, color[3]={255,255,255}, alpha=127, scroll=0)
+{
+	drawLine(id, start[0], start[1], start[2], end[0], end[1], end[2],
+		sprite, frame, rate, life, width, noise, color, alpha, scroll);
+}
+
+stock Float:seek(ent, Float:target[3], Float:maxspeed)
 {
 	new Float:origin[3];
 	pev(ent, pev_origin, origin);
@@ -166,7 +263,7 @@ stock Float:seek(ent, Float:target[3])
 	new Float:desired[3];
 	xs_vec_sub(target, origin, desired);
 	xs_vec_normalize(desired, desired);
-	xs_vec_mul_scalar(desired, 220.0, desired);
+	xs_vec_mul_scalar(desired, maxspeed, desired);
 	
 	new Float:velocity[3];
 	pev(ent, pev_avelocity, velocity);
@@ -177,89 +274,11 @@ stock Float:seek(ent, Float:target[3])
 	return force;
 }
 
-stock Float:separation(npc, Float:force)
+stock truncate(Float:vector[3], Float:max)
 {
-	new Float:v[3];
-	new count = 0;
+	new Float:i;
+	i = max / vector_length(vector);
+	i = (i < 1.0) ? i : 1.0;
 	
-	new Float:origin[3];
-	pev(npc, pev_origin, origin);
-	
-	new ent = -1;
-	while ((ent = find_ent_in_sphere(ent, origin, 80.0)))
-	{
-		if (~pev(ent, pev_flags) & FL_MONSTER)
-			continue;
-		
-		if (npc == ent)
-			continue;
-		
-		new Float:origin2[3];
-		pev(ent, pev_origin, origin2);
-		
-		v[0] += origin2[0] - origin[0];
-		v[1] += origin2[1] - origin[1];
-		v[2] += origin2[2] - origin[2];
-		count++;
-	}
-	
-	if (count == 0)
-		return v;
-	
-	xs_vec_div_scalar(v, float(count), v);
-	xs_vec_mul_scalar(v, -1.0, v);
-	xs_vec_normalize(v, v);
-	xs_vec_mul_scalar(v, force, v);
-	
-	return v;
-}
-
-bool:isPathReachable(ent, Float:start[3], Float:end[3], noMonsters=IGNORE_MONSTERS, hull=HULL_HEAD)
-{
-	engfunc(EngFunc_TraceHull, start, end, noMonsters, hull, ent, 0);
-	
-	new Float:fraction;
-	get_tr2(0, TR_flFraction, fraction);
-	
-	if (fraction < 1.0)
-		return false;
-	
-	engfunc(EngFunc_TraceLine, start, end, noMonsters, ent, 0);
-	
-	get_tr2(0, TR_flFraction, fraction);
-	
-	if (fraction < 1.0)
-		return false;
-	
-	return true;
-}
-
-set_angles(ent, Float:angles[3], Float:max)
-{
-	new Float:angles2[3];
-	pev(ent, pev_angles, angles2);
- 
-	new Float:a = compare_angles(angles, angles2);
-	if (floatabs(a) > max)
-	{
-		a = angles2[1] + floatclamp(a, -max, max);
-		angles2[1] = fixed_angles(a);
-	}
-	else
-	{
-		angles2[1] = angles[1];
-	}
- 
-	angles2[0] = angles[0], angles2[2] = angles[2];
-	set_pev(ent, pev_angles, angles2);
-}
-
-Float:compare_angles(Float:angles[3], Float:angles2[3])
-{
-	return fixed_angles(angles[1] - angles2[1]);
-}
-
-Float:fixed_angles(Float:a)
-{
-	return a + ((a > 180) ? -360.0 : (a < -180) ? 360.0 : 0.0);
+	xs_vec_mul_scalar(vector, i, vector)
 }

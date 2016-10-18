@@ -23,10 +23,12 @@ new g_wayType[MAX_POINTS];
 new g_wayCount;
 
 new g_editor;
-new Float:g_range;
+new Float:g_range = 40.0;
 new g_type;
+new g_paths = 10;
 new g_auto;
-new Float:g_autoDist;
+new Float:g_autoDist = 130.0;
+new g_menuPage;
 
 new g_currentPoint;
 new g_aimPoint;
@@ -42,11 +44,195 @@ public plugin_precache()
 
 public plugin_init()
 {
+	register_plugin("Waypoint", "0.1", "penguinux");
+	
 	register_clcmd("wp_menu", "CmdWayPointMenu");
 	
 	register_forward(FM_PlayerPreThink, "OnPlayerPreThink");
 	
 	set_task(0.5, "DrawWaypoints", 0, .flags="b");
+	
+	loadPoints();
+}
+
+public plugin_natives()
+{
+	register_library("waypoint");
+	
+	register_native("wp_aStar", "native_aStar");
+	register_native("wp_dijkstra", "native_dijkstra");
+	register_native("wp_getOrigin", "native_getOrigin");
+	register_native("wp_getType", "native_getType");
+	register_native("wp_getRange", "native_getRange");
+	register_native("wp_getPath", "native_getPath");
+	register_native("wp_getPaths", "native_getPaths");
+	register_native("wp_isValid", "native_isValid");
+	register_native("wp_findClosestPoint", "native_findClosestPoint");
+	register_native("wp_findClosestPointBetweenPaths", "native_findClosestPointBetweenPaths");
+	register_native("wp_distPointSegment", "native_distPointSegment");
+}
+
+public Array:native_aStar()
+{
+	new start = get_param(1);
+	new goal = get_param(2);
+	
+	if (!isPointValid(start) || !isPointValid(goal))
+	{
+		log_error(AMX_ERR_NATIVE, "Invalid start or goal point.");
+		return Invalid_Array;
+	}
+	
+	return aStar(start, goal);
+}
+
+public Array:native_dijkstra()
+{
+	new start = get_param(1);
+	new goal = get_param(2);
+	
+	if (!isPointValid(start) || !isPointValid(goal))
+	{
+		log_error(AMX_ERR_NATIVE, "Invalid start or goal point.");
+		return Invalid_Array;
+	}
+	
+	return dijkstra(start, goal);
+}
+
+public native_getOrigin()
+{
+	new point = get_param(1);
+	if (!isPointValid(point))
+	{
+		log_error(AMX_ERR_NATIVE, "Invalid waypoint.");
+		return false;
+	}
+	
+	set_array_f(2, g_wayPoint[point], 3);
+	return true;
+}
+
+public native_getType()
+{
+	new point = get_param(1);
+	if (!isPointValid(point))
+	{
+		log_error(AMX_ERR_NATIVE, "Invalid waypoint.");
+		return NULL;
+	}
+	
+	return g_wayType[point];
+}
+
+public Float:native_getRange()
+{
+	new point = get_param(1);
+	if (!isPointValid(point))
+	{
+		log_error(AMX_ERR_NATIVE, "Invalid waypoint.");
+		return -1.0;
+	}
+	
+	return g_wayRange[point];
+}
+
+public native_getPath()
+{
+	new point = get_param(1);
+	if (!isPointValid(point))
+	{
+		log_error(AMX_ERR_NATIVE, "Invalid waypoint.");
+		return NULL;
+	}
+	
+	new i = get_param(2);
+	if (i < 0 || i >= MAX_PATHS)
+	{
+		log_error(AMX_ERR_NATIVE, "Invalid waypoint path id.");
+		return NULL;
+	}
+	
+	return g_wayPaths[point][i];
+}
+
+public native_getPaths()
+{
+	new point = get_param(1);
+	if (!isPointValid(point))
+	{
+		log_error(AMX_ERR_NATIVE, "Invalid waypoint.");
+		return false;
+	}
+	
+	set_array(2, g_wayPaths[point], MAX_PATHS);
+	return true;
+}
+
+public bool:native_isValid()
+{
+	new point = get_param(1);
+	
+	return isPointValid(point);
+}
+
+public native_findClosestPoint()
+{
+	new Float:origin[3];
+	get_array_f(1, origin, 3);
+	
+	new Float:distance = get_param_f(2);
+	
+	return findClosestPoint(origin, distance);
+}
+
+public Float:native_findClosestPointBetweenPaths()
+{
+	new Float:origin[3];
+	get_array_f(1, origin, 3);
+	
+	new path[2], Float:output[3];
+	new Float:dist = findClosestPointBetweenPaths(origin, path, output);
+	
+	set_array(2, path, 2);
+	set_array_f(3, output, 3);
+	return dist;
+}
+
+public Float:native_distPointSegment()
+{
+	new Float:p[3], Float:sp1[3], Float:sp2[3], Float:output[3];
+	get_array_f(1, p, 3);
+	get_array_f(2, sp1, 3);
+	get_array_f(3, sp2, 3);
+	
+	new Float:dist = distPointSegment(p, sp1, sp2, output);
+	set_array_f(4, output, 3);
+	
+	return dist;
+}
+
+public client_disconnected(id)
+{
+	if (g_editor == id)
+		g_editor = 0;
+}
+
+public OnPlayerPreThink(id)
+{
+	if (g_auto && g_editor == id && is_user_alive(id) && (pev(id, pev_flags) & FL_ONGROUND))
+	{
+		static Float:origin[3];
+		pev(id, pev_origin, origin);
+		
+		new point = findClosestPoint(origin, g_autoDist);
+		if (point == NULL)
+		{
+			point = createPoint(origin, g_range, g_type);
+			if (point != NULL)
+				makePaths(point);
+		}
+	}
 }
 
 public CmdWayPointMenu(id)
@@ -79,16 +265,25 @@ public ShowWayPointMenu(id)
 	formatex(text, charsmax(text), "Auto waypoint distance: %.f", g_autoDist);
 	menu_additem(menu, text);
 	
+	formatex(text, charsmax(text), "Show paths: %d", g_paths);
+	menu_additem(menu, text);
+	
 	menu_additem(menu, "Save");
 	menu_additem(menu, "Load");
 	
 	menu_setprop(menu, MPROP_NUMBER_COLOR, "\y");
-	menu_display(id, menu);
+	menu_display(id, menu, g_menuPage);
 	g_editor = id;
 }
 
 public HandleWayPointMenu(id, menu, item)
 {
+	if (is_user_connected(id))
+	{
+		new dummy;
+		player_menu_info(id, dummy, dummy, g_menuPage);
+	}
+	
 	menu_destroy(menu);
 	
 	if (item == MENU_EXIT)
@@ -105,10 +300,12 @@ public HandleWayPointMenu(id, menu, item)
 		case 0:
 		{
 			ShowTypeMenu(id);
+			return;
 		}
 		case 1:
 		{
 			ShowRangeMenu(id);
+			return;
 		}
 		case 2:
 		{
@@ -119,7 +316,10 @@ public HandleWayPointMenu(id, menu, item)
 			if (point == NULL)
 				client_print(0, print_chat, "You cannot create more points.");
 			else
-				client_print(0, print_chat, "Create point #%d", point);
+			{
+				makePaths(point);
+				client_print(0, print_chat, "Create point #%d.", point);
+			}
 		}
 		case 3:
 		{
@@ -129,10 +329,90 @@ public HandleWayPointMenu(id, menu, item)
 			else
 			{
 				removePoint(point);
-				client_print(0, print_chat, "Remove point #%d", point);
+				client_print(0, print_chat, "Remove point #%d.", point);
 			}
 		}
+		case 4:
+		{
+			new point = g_currentPoint;
+			new point2 = g_aimPoint;
+			
+			if (!isPointValid(point) || !isPointValid(point2))
+				client_print(0, print_chat, "Cannot find current point or aim point.");
+			else
+			{
+				createPath(point, point2);
+				client_print(0, print_chat, "Connect point #%d -> #%d.", point, point2);
+			}
+		}
+		case 5:
+		{
+			new point = g_currentPoint;
+			new point2 = g_aimPoint;
+			
+			if (!isPointValid(point) || !isPointValid(point2))
+				client_print(0, print_chat, "Cannot find current point or aim point.");
+			else
+			{
+				createPaths(point, point2);
+				client_print(0, print_chat, "Connect points #%d <-> #%d.", point, point2);
+			}
+		}
+		case 6:
+		{
+			new point = g_currentPoint;
+			new point2 = g_aimPoint;
+			
+			if (!isPointValid(point) || !isPointValid(point2))
+				client_print(0, print_chat, "Cannot find current point or aim point.");
+			else
+			{
+				removePaths(point, point2);
+				client_print(0, print_chat, "Disconnect points #%d - #%d.", point, point2);
+			}
+		}
+		case 7:
+		{
+			new point = g_currentPoint;
+			if (!isPointValid(point))
+				client_print(0, print_chat, "Cannot find current point.");
+			else
+			{
+				g_wayRange[point] = g_range;
+				g_wayType[point] = g_type;
+				
+				client_print(0, print_chat, "Edit point #%d.", point);
+			}
+		}
+		case 8:
+		{
+			g_auto = !g_auto;
+		}
+		case 9:
+		{
+			ShowDistanceMenu(id);
+			return;
+		}
+		case 10:
+		{
+			if (g_paths >= 30)
+				g_paths = 0;
+			else
+				g_paths	+= 2;
+		}
+		case 11:
+		{
+			savePoints();
+			client_print(0, print_chat, "Saved %d waypoints.", g_wayCount);
+		}
+		case 12:
+		{
+			loadPoints();
+			client_print(0, print_chat, "Loaded %d waypoints.", g_wayCount);
+		}
 	}
+	
+	ShowWayPointMenu(id);
 }
 
 public ShowTypeMenu(id)
@@ -193,6 +473,40 @@ public HandleRangeMenu(id, menu, item)
 	ShowWayPointMenu(id);
 }
 
+public ShowDistanceMenu(id)
+{
+	new menu = menu_create("Auto Waypoint Distance", "HandleDistanceMenu");
+	
+	new dist = 100;
+	while (dist <= 200)
+	{
+		static text[32], info[6];
+		formatex(text, charsmax(text), "%d", dist);
+		num_to_str(dist, info, charsmax(info));
+		menu_additem(menu, text, info)
+		dist += 10;
+	}
+	
+	menu_setprop(menu, MPROP_NUMBER_COLOR, "\y");
+	menu_display(id, menu);
+}
+
+public HandleDistanceMenu(id, menu, item)
+{
+	if (item == MENU_EXIT || g_editor != id)
+	{
+		menu_destroy(menu);
+		return;
+	}
+	
+	new info[6], dummy;
+	menu_item_getinfo(menu, item, dummy, info, charsmax(info), _, _, dummy);
+	menu_destroy(menu);
+	
+	g_autoDist = str_to_float(info);
+	ShowWayPointMenu(id);
+}
+
 public DrawWaypoints()
 {
 	if (!g_editor)
@@ -214,6 +528,7 @@ public DrawWaypoints()
 	
 	new drawCount = 0;
 	new drawn[MAX_POINTS >> 5];
+	new numPaths = 0;
 	
 	for (new i = 0; i < g_wayCount; i++)
 	{
@@ -233,56 +548,73 @@ public DrawWaypoints()
 		}
 		
 		new index = pointIndexs[min];
+		new color[3];
 		
 		// current waypoint
 		if (index == g_currentPoint)
 		{
-			drawLine(g_editor, 
-					g_wayPoint[index][0], g_wayPoint[index][1], g_wayPoint[index][2]-32.0,
-					g_wayPoint[index][0], g_wayPoint[index][1], g_wayPoint[index][2]+32.0,
-					g_sprBeam4, .life=5, .width=20, .color={255, 0, 0}, .alpha=255);
+			color = {255, 0, 0};
 			
-			// draw paths
-			for (new i = 0; i < MAX_PATHS; i++)
-			{
-				new p = g_wayPaths[index][i];
-				if (p == NULL)
-					continue;
-				
-				// two-way path
-				if (getWayPath(p, index))
-					drawLine2(g_editor, g_wayPoint[index], g_wayPoint[p],
-							g_sprBeam1, .life=5, .width=10, .noise=3, .color={200, 100, 0}, .alpha=255);
-				// one-way path
-				else
-					drawLine2(g_editor, g_wayPoint[index], g_wayPoint[p],
-							g_sprBeam1, .life=5, .width=10, .noise=3, .color={255, 0, 0}, .alpha=255);
-				
-				drawCount++;
-			}
+			set_hudmessage(255, 0, 0, -1.0, 0.25, 0, 0.0, 0.5, 0.0, 0.0, 4);
+			show_hudmessage(g_editor, "Waypoint #%d^nXYZ: {%.1f, %.1f, %.1f}^nType: %s^nRange: %.f^nPaths: {%d,%d,%d,%d,%d,%d,%d,%d,%d,%d}", 
+							index, 
+							g_wayPoint[index][0], g_wayPoint[index][1], g_wayPoint[index][2],
+							WAYPOINT_TYPES[g_wayType[index]],
+							g_wayRange[index],
+							g_wayPaths[index][0], g_wayPaths[index][1], g_wayPaths[index][2], g_wayPaths[index][3], g_wayPaths[index][4],
+							g_wayPaths[index][5], g_wayPaths[index][6], g_wayPaths[index][7], g_wayPaths[index][8], g_wayPaths[index][9]);
 			
 			// draw circle
-			new Float:polygon[8][3];
-			for (new i = 1; i <= 8; i++)
+			new Float:polygon[6][3];
+			for (new j = 1; j <= 6; j++)
 			{
-				new j = i-1;
-				polygon[j][0] = floatcos(360 / 8 * float(i) - 180.0, degrees) * g_wayRange[index] + g_wayPoint[index][0];
-				polygon[j][1] = floatsin(360 / 8 * float(i) - 180.0, degrees) * g_wayRange[index] + g_wayPoint[index][1];
-				polygon[j][2] = g_wayPoint[index][2] - 16.0;
+				new k = j-1;
+				polygon[k][0] = floatcos(360 / 6 * float(j) - 180.0, degrees) * g_wayRange[index] + g_wayPoint[index][0];
+				polygon[k][1] = floatsin(360 / 6 * float(j) - 180.0, degrees) * g_wayRange[index] + g_wayPoint[index][1];
+				polygon[k][2] = g_wayPoint[index][2] - 16.0;
 			}
 			
-			for (new i = 0, j = 8-1; i < 8; j=i++)
+			for (new j = 0, k = 6-1; j < 6; k=j++)
 			{
-				drawLine2(g_editor, polygon[i], polygon[j],
+				drawLine2(g_editor, polygon[j], polygon[k],
 						g_sprBeam4, .life=5, .width=10, .color={200, 0, 0}, .alpha=255);
 			}
 		}
 		else
 		{
-			drawLine(g_editor, 
-					g_wayPoint[index][0], g_wayPoint[index][1], g_wayPoint[index][2]-32.0,
-					g_wayPoint[index][0], g_wayPoint[index][1], g_wayPoint[index][2]+32.0,
-					g_sprBeam4, .life=5, .width=20, .color={0, 255, 0}, .alpha=255);
+			switch (g_wayType[index])
+			{
+				case 1: color = {0, 200, 100};
+				default: color = {0, 255, 0};
+			}
+		}
+		
+		drawLine(g_editor, 
+				g_wayPoint[index][0], g_wayPoint[index][1], g_wayPoint[index][2]-32.0,
+				g_wayPoint[index][0], g_wayPoint[index][1], g_wayPoint[index][2]+32.0,
+				g_sprBeam4, .life=5, .width=20, .color=color, .alpha=255);
+		
+		for (new j = 0; j < MAX_PATHS; j++)
+		{
+			if (numPaths >= g_paths && index != g_currentPoint)
+				break;
+			
+			new point = g_wayPaths[index][j]
+			if (point == NULL)
+				continue;
+			
+			if (getBits(drawn, point))
+				continue;
+			
+			if (getWayPath(point, index))
+				drawLine2(g_editor, g_wayPoint[index], g_wayPoint[point],
+					g_sprBeam1, .life=5, .width=10, .noise=5, .color={200, 100, 0}, .alpha=255);
+			else
+				drawLine2(g_editor, g_wayPoint[index], g_wayPoint[point],
+					g_sprBeam1, .life=5, .width=10, .noise=5, .color={200, 0, 0}, .alpha=255);
+			
+			numPaths++;
+			drawCount++;
 		}
 		
 		// add to drawn bits
@@ -301,8 +633,161 @@ public DrawWaypoints()
 	if (g_aimPoint > NULL)
 	{
 		drawLine2(g_editor, origin, g_wayPoint[g_aimPoint],
-				g_sprArrow, .life=5, .width=20, .color={200, 200, 200}, .alpha=255);
+			g_sprArrow, .life=5, .width=20, .color={200, 200, 200}, .alpha=255);
 	}
+}
+
+stock Array:aStar(start, goal)
+{
+	new closedSet[MAX_POINTS >> 5];
+	
+	static openSet[MAX_POINTS];
+	new numOpens = 0;
+	
+	new cameFrom[MAX_POINTS] = {NULL, ...};
+	
+	new Float:gScore[MAX_POINTS] = {999999.0, ...};
+	new Float:fScore[MAX_POINTS] = {999999.0, ...};
+	
+	gScore[start] = 0.0;
+	fScore[start] = heuristic(start, goal);
+	openSet[numOpens++] = start;
+	
+	while (numOpens)
+	{
+		new current, index;
+		new Float:score = 999999.0;
+		
+		for (new i = 0; i < numOpens; i++)
+		{
+			new point = openSet[i];
+			if (fScore[point] < score)
+			{
+				current = point;
+				index = i;
+				score = fScore[point];
+			}
+		}
+		
+		if (current == goal)
+		{
+			new Array:path = ArrayCreate(1);
+			ArrayPushCell(path, current);
+			
+			while (cameFrom[current] != NULL)
+			{
+				current = cameFrom[current];
+				ArrayInsertCellBefore(path, 0, current);
+			}
+			
+			return path;
+		}
+		
+		openSet[index] = openSet[--numOpens];
+		setBits(closedSet, current);
+		
+		for (new i = 0; i < MAX_PATHS; i++)
+		{
+			new neighbor = g_wayPaths[current][i];
+			if (neighbor == NULL)
+				continue;
+			
+			if (getBits(closedSet, neighbor))
+				continue;
+			
+			score = gScore[current] + get_distance_f(g_wayPoint[current], g_wayPoint[neighbor]);
+			if (!isInArray(neighbor, openSet, numOpens))
+				openSet[numOpens++] = neighbor;
+			else if (score >= gScore[neighbor])
+				continue;
+			
+			cameFrom[neighbor] = current;
+			gScore[neighbor] = score;
+			fScore[neighbor] = score + heuristic(neighbor, goal);
+		}
+	}
+	
+	return Invalid_Array;
+}
+
+stock Array:dijkstra(start, goal)
+{
+	static queue[MAX_POINTS];
+	new numQueue = 0;
+	
+	new Float:distance[MAX_POINTS] = {999999.0, ...};
+	new previous[MAX_POINTS] = {NULL, ...};
+	
+	for (new i = 0; i < g_wayCount; i++)
+	{
+		queue[numQueue++] = i;
+	}
+	
+	distance[start] = 0.0;
+	
+	while (numQueue)
+	{
+		new current;
+		new Float:dist = 999999.0;
+		
+		for (new i = 0; i < numQueue; i++)
+		{
+			new point = queue[i];
+			if (distance[point] < dist)
+			{
+				current = point;
+				dist = distance[point];
+			}
+		}
+		
+		if (current == goal)
+		{
+			new Array:path = ArrayCreate(1);
+			ArrayPushCell(path, current);
+			
+			while (previous[current] != NULL)
+			{
+				current = previous[current];
+				ArrayInsertCellBefore(path, 0, current);
+			}
+			
+			return path;
+		}
+		
+		queue[current] = queue[--numQueue];
+		
+		for (new i = 0; i < MAX_PATHS; i++)
+		{
+			new neighbor = g_wayPaths[current][i];
+			if (neighbor == NULL)
+				continue;
+			
+			dist = distance[current] + get_distance_f(g_wayPoint[current], g_wayPoint[neighbor]);
+			if (dist < distance[neighbor])
+			{
+				distance[neighbor] = dist;
+				previous[neighbor] = current;
+			}
+		}
+	}
+	
+	return Invalid_Array;
+}
+
+stock Float:heuristic(start, end)
+{
+	return get_distance_f(g_wayPoint[start], g_wayPoint[end]);
+}
+
+stock bool:isInArray(value, const array[], size)
+{
+	for (new i = 0; i < size; i++)
+	{
+		if (array[i] == value)
+			return true;
+	}
+	
+	return false;
 }
 
 stock bool:isPointValid(point)
@@ -313,7 +798,7 @@ stock bool:isPointValid(point)
 	return true;
 }
 
-stock createPoint(Float:origin[3], Float:range, type)
+stock createPoint(Float:origin[3], Float:range=0.0, type=0)
 {
 	new index = g_wayCount;
 	if (index >= MAX_POINTS)
@@ -348,6 +833,80 @@ stock removePoint(index)
 	}
 }
 
+stock savePoints()
+{
+	new mapName[32];
+	get_mapname(mapName, charsmax(mapName));
+	
+	new filePath[100];
+	get_localinfo("amxx_configsdir", filePath, charsmax(filePath));
+	format(filePath, charsmax(filePath), "%s/waypoints/%s.wp", filePath, mapName);
+	
+	new fp = fopen(filePath, "w");
+	
+	for (new i = 0; i < g_wayCount; i++)
+	{
+		fprintf(fp, "%f %f %f ", g_wayPoint[i][0], g_wayPoint[i][1], g_wayPoint[i][2]);
+		
+		fprintf(fp, "%f %d ", g_wayRange[i], g_wayType[i]);
+		
+		for (new j = 0; j < MAX_PATHS; j++)
+		{
+			fprintf(fp, "%d ", g_wayPaths[i][j]);
+		}
+		
+		fprintf(fp, "^n");
+	}
+	
+	fclose(fp);
+}
+
+stock loadPoints()
+{
+	new mapName[32];
+	get_mapname(mapName, charsmax(mapName));
+	
+	new filePath[100];
+	get_localinfo("amxx_configsdir", filePath, charsmax(filePath));
+	format(filePath, charsmax(filePath), "%s/waypoints/%s.wp", filePath, mapName);
+	
+	new fp = fopen(filePath, "r");
+	
+	while (!feof(fp))
+	{
+		static buffer[100];
+		fgets(fp, buffer, charsmax(buffer));
+		
+		if (!buffer[0]) continue;
+		
+		static string[16], Float:origin[3];
+		for (new i = 0; i < 3; i++)
+		{
+			argbreak(buffer, string, 15, buffer, 99);
+			origin[i] = str_to_float(string);
+		}
+		
+		new point = createPoint(origin);
+		
+		// get range
+		argbreak(buffer, string, 15, buffer, 99);
+		g_wayRange[point] = str_to_float(string);
+		
+		// get type
+		argbreak(buffer, string, 15, buffer, 99);
+		g_wayType[point] = str_to_num(string);
+		
+		// get paths
+		for (new i = 0; i < MAX_PATHS; i++)
+		{
+			argbreak(buffer, string, 15, buffer, 99);
+			g_wayPaths[point][i] = str_to_num(string);
+		}
+	}
+	
+	fclose(fp);
+}
+
 stock bool:getWayPath(p1, p2)
 {
 	for (new i = 0; i < MAX_PATHS; i++)
@@ -358,6 +917,80 @@ stock bool:getWayPath(p1, p2)
 	}
 	
 	return false
+}
+
+stock bool:createPath(point, point2)
+{
+	if (point == point2)
+		return false;
+	
+	for (new i = 0; i < MAX_PATHS; i++)
+	{
+		if (g_wayPaths[point][i] == point2)
+			return false;
+	}
+	
+	for (new i = 0; i < MAX_PATHS; i++)
+	{
+		if (g_wayPaths[point][i] == NULL)
+		{
+			g_wayPaths[point][i] = point2;
+			return true;
+		}
+	}
+	
+	return false;
+}
+
+stock createPaths(point, point2)
+{
+	createPath(point, point2);
+	createPath(point2, point);
+}
+
+stock bool:removePath(point, point2)
+{
+	for (new i = 0; i < MAX_PATHS; i++)
+	{
+		if (g_wayPaths[point][i] == point2)
+		{
+			g_wayPaths[point][i] = NULL;
+			return true;
+		}
+	}
+	
+	return false;
+}
+
+stock removePaths(point, point2)
+{
+	removePath(point, point2);
+	removePath(point2, point);
+}
+
+stock makePaths(point)
+{
+	for (new i = 0; i < g_wayCount; i++)
+	{
+		if (get_distance_f(g_wayPoint[point], g_wayPoint[i]) < (g_autoDist * 1.6))
+		{
+			if (isReachable(g_wayPoint[point], g_wayPoint[i]))
+				createPaths(point, i);
+		}
+	}
+}
+
+stock bool:isReachable(Float:start[3], Float:end[3], noMonsters=IGNORE_MONSTERS, hull=HULL_HEAD, skipEnt=0)
+{
+	engfunc(EngFunc_TraceHull, start, end, noMonsters, hull, skipEnt, 0);
+			
+	new Float:fraction;
+	get_tr2(0, TR_flFraction, fraction);
+	
+	if (fraction < 1.0)
+		return false;
+	
+	return true;
 }
 
 stock findClosestPoint(Float:origin[3], Float:distance=9999.0)
@@ -378,7 +1011,43 @@ stock findClosestPoint(Float:origin[3], Float:distance=9999.0)
 	return point;
 }
 
-stock getAimPoint(ent, points[MAX_POINTS >> 5], Float:distance=9999.0)
+stock Float:findClosestPointBetweenPaths(Float:origin[3], path[2], Float:output[3])
+{
+	new found[MAX_POINTS >> 5];
+	new Float:minDist = 999999.0;
+	
+	path[0] = NULL;
+	path[1] = NULL;
+	
+	for (new a = 0; a < g_wayCount; a++)
+	{
+		for (new j = 0; j < MAX_PATHS; j++)
+		{
+			new b = g_wayPaths[a][j];
+			if (b == NULL)
+				continue;
+			
+			if (getBits(found, b))
+				continue;
+			
+			static Float:pos[3];
+			new Float:dist = distPointSegment(origin, g_wayPoint[a], g_wayPoint[b], pos);
+			if (dist < minDist)
+			{
+				path[0] = a;
+				path[1] = b;
+				output = pos;
+				minDist = dist;
+			}
+		}
+		
+		setBits(found, a);
+	}
+	
+	return minDist;
+}
+
+stock getAimPoint(ent, points[MAX_POINTS >> 5]={-1, ...}, Float:distance=9999.0)
 {
 	new Float:start[3], Float:end[3];
 	pev(ent, pev_origin, start);
@@ -391,35 +1060,27 @@ stock getAimPoint(ent, points[MAX_POINTS >> 5], Float:distance=9999.0)
 	
 	new min = NULL;
 	new Float:minDist = distance;
-	new Float:pos[3], Float:pos2[3];
-	new Float:fuck[3], Float:fuck2[3];
 	
 	for (new i = 0; i < g_wayCount; i++)
 	{
 		if (!getBits(points, i))
 			continue;
 		
+		static Float:pos[3];
 		distPointSegment(g_wayPoint[i], start, end, pos);
 		
-		start = g_wayPoint[i];
-		end = g_wayPoint[i];
-		start[2] -= 32.0;
-		end[2] += 32.0;
+		static Float:start2[3], Float:end2[3];
+		start2 = g_wayPoint[i];
+		start2[2] -= 32.0;
+		end2 = g_wayPoint[i];
+		end2[2] += 32.0;
 		
-		new Float:dist = distPointSegment(pos, start, end, pos2);
+		new Float:dist = distPointSegment(pos, start2, end2, Float:{0.0, 0.0, 0.0});
 		if (dist < minDist)
 		{
 			min = i;
 			minDist = dist;
-			fuck = pos;
-			fuck2 = pos2;
 		}
-	}
-	
-	if (min > NULL)
-	{
-		drawLine2(g_editor, fuck, fuck2,
-				g_sprBeam4, .life=5, .width=20, .color={200, 200, 200}, .alpha=255);
 	}
 	
 	return min;
