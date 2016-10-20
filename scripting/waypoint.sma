@@ -3,7 +3,7 @@
 #include <xs>
 
 #define NULL -1
-#define MAX_POINTS 1024
+#define MAX_POINTS 2048
 #define MAX_PATHS 10
 
 #define getBits(%1,%2) (%1[%2 >> 5] &  (1 << (%2 & 31)))
@@ -642,12 +642,17 @@ stock Array:aStar(start, goal)
 	new closedSet[MAX_POINTS >> 5];
 	
 	static openSet[MAX_POINTS];
-	new numOpens = 0;
+	static numOpens; numOpens = 0;
 	
-	new cameFrom[MAX_POINTS] = {NULL, ...};
+	static cameFrom[MAX_POINTS];
+	static Float:gScore[MAX_POINTS], Float:fScore[MAX_POINTS];
 	
-	new Float:gScore[MAX_POINTS] = {999999.0, ...};
-	new Float:fScore[MAX_POINTS] = {999999.0, ...};
+	for (new i = 0; i < g_wayCount; i++)
+	{
+		cameFrom[i] = NULL;
+		gScore[i] = 999999.0;
+		fScore[i] = 999999.0;
+	}
 	
 	gScore[start] = 0.0;
 	fScore[start] = heuristic(start, goal);
@@ -695,6 +700,9 @@ stock Array:aStar(start, goal)
 			if (getBits(closedSet, neighbor))
 				continue;
 			
+			if (!isReachable(g_wayPoint[current], g_wayPoint[neighbor]))
+				continue;
+			
 			score = gScore[current] + get_distance_f(g_wayPoint[current], g_wayPoint[neighbor]);
 			if (!isInArray(neighbor, openSet, numOpens))
 				openSet[numOpens++] = neighbor;
@@ -713,13 +721,15 @@ stock Array:aStar(start, goal)
 stock Array:dijkstra(start, goal)
 {
 	static queue[MAX_POINTS];
-	new numQueue = 0;
+	static numQueue; numQueue = 0;
 	
-	new Float:distance[MAX_POINTS] = {999999.0, ...};
-	new previous[MAX_POINTS] = {NULL, ...};
+	static Float:distance[MAX_POINTS];
+	static previous[MAX_POINTS];
 	
 	for (new i = 0; i < g_wayCount; i++)
 	{
+		distance[i] = 999999.0;
+		previous[i] = NULL;
 		queue[numQueue++] = i;
 	}
 	
@@ -974,13 +984,26 @@ stock makePaths(point)
 	{
 		if (get_distance_f(g_wayPoint[point], g_wayPoint[i]) < (g_autoDist * 1.6))
 		{
-			if (isReachable(g_wayPoint[point], g_wayPoint[i]))
+			if (isReachableHull(g_wayPoint[point], g_wayPoint[i]))
 				createPaths(point, i);
 		}
 	}
 }
 
-stock bool:isReachable(Float:start[3], Float:end[3], noMonsters=IGNORE_MONSTERS, hull=HULL_HEAD, skipEnt=0)
+stock bool:isReachable(Float:start[3], Float:end[3], noMonsters=IGNORE_MONSTERS, skipEnt=0)
+{
+	engfunc(EngFunc_TraceLine, start, end, noMonsters, skipEnt, 0);
+			
+	new Float:fraction;
+	get_tr2(0, TR_flFraction, fraction);
+	
+	if (fraction < 1.0)
+		return false;
+	
+	return true;
+}
+
+stock bool:isReachableHull(Float:start[3], Float:end[3], noMonsters=IGNORE_MONSTERS, hull=HULL_HEAD, skipEnt=0)
 {
 	engfunc(EngFunc_TraceHull, start, end, noMonsters, hull, skipEnt, 0);
 			
