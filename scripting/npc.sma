@@ -31,7 +31,7 @@ public plugin_init()
 	register_clcmd("create_npc", "CmdCreateNpc");
 	register_clcmd("create_obs", "CmdCreateObs");
 	register_clcmd("say /follow", "CmdNpcFollow");
-	register_clcmd("say /intersect", "CmdIntersect");
+	register_clcmd("intersect", "CmdIntersect");
 	
 	register_think("npc_test", "ThinkNpc");
 	
@@ -116,21 +116,17 @@ public CmdNpcFollow(id)
 
 public CmdIntersect(id)
 {
-	new Float:origin[3];
-	entity_get_vector(id, EV_VEC_origin, origin);
-	
 	new Float:start[3], Float:end[3];
-	start = origin;
-	entity_get_vector(id, EV_VEC_view_ofs, end);
+	pev(id, pev_origin, start);
+	
+	pev(id, pev_view_ofs, end);
 	xs_vec_add(start, end, start);
 	
-	velocity_by_aim(id, 9999, end);
+	velocity_by_aim(id, 500, end);
 	xs_vec_add(end, start, end);
 	
-	new Float:hit[3];
 	new ent = -1;
-	
-	while ((ent = find_ent_in_sphere(ent, origin, 500.0)) != 0)
+	while ((ent = find_ent_in_sphere(ent, start, 500.0)) != 0)
 	{
 		if (!is_valid_ent(ent))
 			continue;
@@ -138,22 +134,36 @@ public CmdIntersect(id)
 		if (entity_get_int(ent, EV_INT_movetype) == MOVETYPE_PUSHSTEP || entity_get_int(ent, EV_INT_solid) == SOLID_BSP)
 			continue;
 		
+		if (entity_get_float(ent, EV_FL_takedamage) == DAMAGE_NO)
+			continue;
+		
 		if (id == ent)
 			continue;
 		
-		static Float:pos[3], Float:mins[3], Float:maxs[3];
-		entity_get_vector(ent, EV_VEC_origin, pos);
+		static Float:origin[3], Float:mins[3], Float:maxs[3];
+		entity_get_vector(ent, EV_VEC_origin, origin);
 		entity_get_vector(ent, EV_VEC_mins, mins);
 		entity_get_vector(ent, EV_VEC_maxs, maxs);
 		
-		if (intersectLineBox(mins, maxs, start, end, hit))
+		xs_vec_add(origin, mins, mins);
+		xs_vec_add(origin, maxs, maxs);
+		
+		static Float:intersection[3];
+		if (intersectSegmentBox2(start, end, mins, maxs, intersection))
+		{
+			drawLine(id, 
+				intersection[0], intersection[1], intersection[2]-5.0, 
+				intersection[0], intersection[1], intersection[2]+5.0, 
+				g_sprBeam4, .life=100, .width=10, .color={255, 0, 0}, .alpha=255);
+			
+			client_print(id, print_chat, "intersect");
 			break;
+		}
+		else
+		{
+			client_print(id, print_chat, "no intersect");
+		}
 	}
-	
-	drawLine(id, 
-			hit[0], hit[1], hit[2]-5.0,
-			hit[0], hit[1], hit[2]+5.0,
-			g_sprBeam4, .life=100, .width=20, .color={255, 0, 0}, .alpha=255);
 }
 
 public ThinkNpc(npc)
@@ -223,7 +233,7 @@ public ThinkNpc(npc)
 		{
 			new Float:steering[3];
 			xs_vec_add(steering, seek(npc, target, 200.0), steering);
-			//xs_vec_add(steering, separation(npc, 125.0), steering);
+			xs_vec_add(steering, collisionAvoidance(npc, 200.0, 200.0), steering);
 			
 			new Float:avelocity[3];
 			entity_get_vector(npc, EV_VEC_avelocity, avelocity);
@@ -371,6 +381,9 @@ stock Float:separation(npc, Float:force)
 		if (entity_get_int(ent, EV_INT_movetype) == MOVETYPE_PUSHSTEP || entity_get_int(ent, EV_INT_solid) == SOLID_BSP)
 			continue;
 		
+		if (entity_get_float(ent, EV_FL_takedamage) == DAMAGE_NO)
+			continue;
+		
 		if (npc == ent)
 			continue;
 		
@@ -405,53 +418,160 @@ stock truncate(Float:vector[3], Float:max)
 	xs_vec_mul_scalar(vector, i, vector)
 }
 
-stock intersectLineBox(Float:b1[3], Float:b2[3], Float:l1[3], Float:l2[3], Float:output[3])
+stock Float:collisionAvoidance(npc, Float:maxspeed, Float:force)
 {
-	if (l2[0] < b1[0] && l1[0] < b1[0]) return false;
-	if (l2[0] > b2[0] && l1[0] > b2[0]) return false;
-	if (l2[1] < b1[1] && l1[1] < b1[1]) return false;
-	if (l2[1] > b2[1] && l1[1] > b2[1]) return false;
-	if (l2[2] < b1[2] && l1[2] < b1[2]) return false;
-	if (l2[2] > b2[2] && l1[2] > b2[2]) return false;
+	new Float:position[3], Float:velocity[3];
+	entity_get_vector(npc, EV_VEC_origin, position);
+	entity_get_vector(npc, EV_VEC_avelocity, velocity);
 	
-	if (l1[0] > b1[0] && l1[0] < b2[0] && l1[1] > b1[1] && l1[1] < b2[1] && l1[2] > b1[2] && l1[2] < b2[2]) 
+	new Float:ahead[3];
+	xs_vec_normalize(velocity, ahead);
+	xs_vec_mul_scalar(ahead, vector_length(velocity) / maxspeed, ahead);
+	xs_vec_add(position, ahead, ahead);
+	
+	new obstacle = NULL;
+	new Float:minDist = 999999.0;
+	new Float:radius = get_distance_f(position, ahead);
+	new Float:intersect[3];
+	
+	new ent = -1;
+	while ((ent = find_ent_in_sphere(ent, position, radius)) != 0)
 	{
-		output = l1;
+		if (!is_valid_ent(ent))
+			continue;
+		
+		if (entity_get_int(ent, EV_INT_movetype) == MOVETYPE_PUSHSTEP || entity_get_int(ent, EV_INT_solid) == SOLID_BSP)
+			continue;
+		
+		if (entity_get_float(ent, EV_FL_takedamage) == DAMAGE_NO)
+			continue;
+		
+		if (npc == ent)
+			continue;
+		
+		static Float:origin[3], Float:mins[3], Float:maxs[3];
+		entity_get_vector(ent, EV_VEC_origin, origin);
+		entity_get_vector(ent, EV_VEC_mins, mins);
+		entity_get_vector(ent, EV_VEC_maxs, maxs);
+		
+		xs_vec_add(origin, mins, mins);
+		xs_vec_add(origin, maxs, maxs);
+		
+		static Float:intersect2[3];
+		if (intersectSegmentBox2(position, ahead, mins, maxs, intersect2))
+		{
+			new Float:dist = get_distance_f(position, origin);
+			if (dist < minDist)
+			{
+				obstacle = ent;
+				minDist = dist;
+				intersect = intersect2;
+			}
+		}
+	}
+	
+	new Float:avoidance[3];
+	if (obstacle != NULL)
+	{
+		new Float:center[3];
+		entity_get_vector(obstacle, EV_VEC_origin, center);
+		
+		xs_vec_sub(intersect, center, avoidance);
+		xs_vec_normalize(avoidance, avoidance);
+		xs_vec_mul_scalar(avoidance, force, avoidance);
+	}
+	
+	return avoidance;
+}
+
+stock bool:intersectSegmentBox(Float:begin[3], Float:end[3], Float:mins[3], Float:maxs[3], Float:output[3])
+{
+	new Float:beginToEnd[3], Float:beginToMin[3], Float:beginToMax[3];
+	xs_vec_sub(end, begin, beginToEnd);
+	xs_vec_sub(mins, begin, beginToMin);
+	xs_vec_sub(maxs, begin, beginToMax);
+	
+	new Float:tNear = -99999999.0;
+	new Float:tFar = 99999999.0;
+	
+	for (new i = 0; i < 3; i++)
+	{
+		if (beginToEnd[i] == 0.0)
+		{
+			if (beginToMin[i] > 0.0 || beginToMax[i] < 0.0)
+				return false;
+		}
+		else
+		{
+			new Float:t1 = beginToMin[i] / beginToEnd[i];
+			new Float:t2 = beginToMax[i] / beginToEnd[i];
+			new Float:tMin = floatmin(t1, t2);
+			new Float:tMax = floatmin(t1, t2);
+			
+			if (tMin > tNear) tNear = tMin;
+			if (tMax < tFar) tFar = tMax;
+			if (tNear > tFar || tFar < 0.0)
+				return false;
+		}
+	}
+	
+	if (tNear >= 0.0 && tNear <= 1.0)
+	{
+		xs_vec_mul_scalar(output, tNear, output);
+		xs_vec_add(begin, output, output);
 		return true;
 	}
 	
-	if ( (intersection(l1[0]-b1[0], l2[0]-b1[0], l1, l2, output) && isInBox(output, b1, b2, 1))
-	|| (intersection(l1[1]-b1[1], l2[1]-b1[1], l1, l2, output) && isInBox(output, b1, b2, 2)) 
-	|| (intersection(l1[2]-b1[2], l2[2]-b1[2], l1, l2, output) && isInBox(output, b1, b2, 3)) 
-	|| (intersection(l1[0]-b2[0], l2[0]-b2[0], l1, l2, output) && isInBox(output, b1, b2, 1)) 
-	|| (intersection(l1[1]-b2[1], l2[1]-b2[1], l1, l2, output) && isInBox(output, b1, b2, 2)) 
-	|| (intersection(l1[2]-b2[2], l2[2]-b2[2], l1, l2, output) && isInBox(output, b1, b2, 3)) )
+	if (tFar >= 0.0 && tFar <= 1.0)
+	{
+		xs_vec_mul_scalar(output, tFar, output);
+		xs_vec_add(begin, output, output);
 		return true;
+	}
 	
 	return false;
 }
 
-stock intersection(Float:dst1, Float:dst2, Float:p1[3], Float:p2[3], Float:output[3])
+stock bool:intersectSegmentBox2(Float:begin[3], Float:end[3], Float:mins[3], Float:maxs[3], Float:output[3])
 {
-	if ((dst1 * dst2) >= 0.0)
-		return 0;
+	new Float:st, Float:et, Float:fst = 0.0, Float:fet = 1.0;
+	new Float:bmin, Float:bmax;
+	new Float:si, Float:ei;
+	
+	for (new i = 0; i < 3; i++)
+	{
+		bmin = mins[i];
+		bmax = maxs[i];
+		si = begin[i];
+		ei = end[i];
 		
-	if (dst1 == dst2)
-		return 0;
+		if (si < ei)
+		{
+			if (si > bmax || ei < bmin)
+				return false;
+			
+			new Float:di = ei - si;
+			st = (si < bmin) ? (bmin - si) / di : 0.0;
+			et = (ei > bmax) ? (bmax - si) / di : 1.0;
+		}
+		else
+		{
+			if (ei > bmax || si < bmin)
+				return false;
+			
+			new Float:di = ei - si;
+			st = (si > bmax) ? (bmax - si) / di : 0.0;
+			et = (ei < bmin) ? (bmin - si) / di : 1.0;
+		}
+		
+		if (st > fst) fst = st;
+		if (et < fet) fet = et;
+		if (fet < fst)
+			return false;
+	}
 	
-	new Float:mul = (-dst1 / (dst2 - dst1));
-	output[0] = p1[0] + (p2[0] - p1[0]) * mul;
-	output[1] = p1[1] + (p2[1] - p1[1]) * mul;
-	output[2] = p1[2] + (p2[2] - p1[2]) * mul;
-	
-	return 1;
-}
-
-stock isInBox(Float:hit[3], Float:b1[3], Float:b2[3], axis)
-{
-	if (axis == 1 && hit[2] > b1[2] && hit[2] < b2[2] && hit[1] > b1[1] && hit[1] < b2[1]) return 1;
-	if (axis == 2 && hit[2] > b1[2] && hit[2] < b2[2] && hit[0] > b1[0] && hit[0] < b2[0]) return 1;
-	if (axis == 3 && hit[0] > b1[0] && hit[0] < b2[0] && hit[1] > b1[1] && hit[1] < b2[1]) return 1;
-	
-	return 0;
+	xs_vec_sub(end, begin, output);
+	xs_vec_mul_scalar(output, fst, output);
+	xs_vec_add(begin, output, output);
+	return true;
 }
