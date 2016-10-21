@@ -233,7 +233,8 @@ public ThinkNpc(npc)
 		{
 			new Float:steering[3];
 			xs_vec_add(steering, seek(npc, target, 200.0), steering);
-			xs_vec_add(steering, collisionAvoidance(npc, 200.0, 200.0), steering);
+			xs_vec_add(steering, collisionAvoidance(npc, 200.0, 100.0), steering);
+			//xs_vec_add(steering, separation(npc, 100.0, 50.0), steering);
 			
 			new Float:avelocity[3];
 			entity_get_vector(npc, EV_VEC_avelocity, avelocity);
@@ -364,7 +365,7 @@ stock Float:seek(ent, Float:target[3], Float:maxspeed)
 	return force;
 }
 
-stock Float:separation(npc, Float:force)
+stock Float:separation(npc, Float:radius, Float:force)
 {
 	new Float:v[3];
 	new count = 0;
@@ -373,7 +374,7 @@ stock Float:separation(npc, Float:force)
 	entity_get_vector(npc, EV_VEC_origin, origin);
 	
 	new ent = -1;
-	while ((ent = find_ent_in_sphere(ent, origin, 80.0)) != 0)
+	while ((ent = find_ent_in_sphere(ent, origin, radius)) != 0)
 	{
 		if (!is_valid_ent(ent))
 			continue;
@@ -395,8 +396,6 @@ stock Float:separation(npc, Float:force)
 		v[2] += origin2[2] - origin[2];
 		count++;
 	}
-	
-	client_print(0, print_chat, "count = %d", count);
 	
 	if (count == 0)
 		return v;
@@ -420,18 +419,21 @@ stock truncate(Float:vector[3], Float:max)
 
 stock Float:collisionAvoidance(npc, Float:maxspeed, Float:force)
 {
-	new Float:position[3], Float:velocity[3];
+	new Float:position[3], Float:velocity[3], Float:angles[3];
 	entity_get_vector(npc, EV_VEC_origin, position);
-	entity_get_vector(npc, EV_VEC_avelocity, velocity);
+	entity_get_vector(npc, EV_VEC_velocity, velocity);
+	entity_get_vector(npc, EV_VEC_angles, angles);
 	
 	new Float:ahead[3];
-	xs_vec_normalize(velocity, ahead);
-	xs_vec_mul_scalar(ahead, vector_length(velocity) / maxspeed, ahead);
+	angle_vector(angles, ANGLEVECTOR_FORWARD, ahead);
+	xs_vec_mul_scalar(ahead, floatmax(vector_length(velocity), 50.0), ahead);
 	xs_vec_add(position, ahead, ahead);
+	
+	drawLine2(0, position, ahead, g_sprBeam4, .life=1, .width=10, .color={255, 0, 0}, .alpha=255);
 	
 	new obstacle = NULL;
 	new Float:minDist = 999999.0;
-	new Float:radius = get_distance_f(position, ahead);
+	new Float:radius = get_distance_f(position, ahead) + 100.0;
 	new Float:intersect[3];
 	
 	new ent = -1;
@@ -453,6 +455,9 @@ stock Float:collisionAvoidance(npc, Float:maxspeed, Float:force)
 		entity_get_vector(ent, EV_VEC_origin, origin);
 		entity_get_vector(ent, EV_VEC_mins, mins);
 		entity_get_vector(ent, EV_VEC_maxs, maxs);
+		
+		xs_vec_mul_scalar(mins, 2.25, mins);
+		xs_vec_mul_scalar(maxs, 2.25, maxs);
 		
 		xs_vec_add(origin, mins, mins);
 		xs_vec_add(origin, maxs, maxs);
@@ -476,9 +481,13 @@ stock Float:collisionAvoidance(npc, Float:maxspeed, Float:force)
 		new Float:center[3];
 		entity_get_vector(obstacle, EV_VEC_origin, center);
 		
+		//distPointSegment(center, position, ahead, intersect);
+		
 		xs_vec_sub(intersect, center, avoidance);
 		xs_vec_normalize(avoidance, avoidance);
 		xs_vec_mul_scalar(avoidance, force, avoidance);
+		
+		//client_print(0, print_chat, "obstacle = %d", obstacle);
 	}
 	
 	return avoidance;
@@ -574,4 +583,33 @@ stock bool:intersectSegmentBox2(Float:begin[3], Float:end[3], Float:mins[3], Flo
 	xs_vec_mul_scalar(output, fst, output);
 	xs_vec_add(begin, output, output);
 	return true;
+}
+
+stock Float:distPointSegment(Float:p[3], Float:sp1[3], Float:sp2[3], Float:output[3])
+{
+	new Float:v[3], Float:w[3];
+	xs_vec_sub(sp2, sp1, v);
+	xs_vec_sub(p, sp1, w);
+	
+	new Float:c1 = xs_vec_dot(w, v);
+	if (c1 <= 0)
+	{
+		output = sp1;
+		return get_distance_f(p, sp1);
+	}
+	
+	new Float:c2 = xs_vec_dot(v, v);
+	if (c2 <= c1)
+	{
+		output = sp2;
+		return get_distance_f(p, sp2);
+	}
+	
+	new Float:b = c1 / c2;
+	new Float:pB[3];
+	xs_vec_mul_scalar(v, b, pB);
+	xs_vec_add(sp1, pB, pB);
+	
+	output = pB;
+	return get_distance_f(p, pB);
 }
