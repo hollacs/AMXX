@@ -7,10 +7,12 @@
 
 #define ANIM_IDLE 1
 #define ANIM_RUN 4
+#define ANIM_JUMP 6
 
 native Array:wp_aStar(start, goal);
 native wp_getOrigin(point, Float:origin[3]);
 native Float:wp_getRange(point);
+native wp_getType(point);
 native wp_findClosestPoint(Float:origin[3], Float:distance=999999.0);
 native Float:wp_distPointSegment(Float:p[3], Float:sp1[3], Float:sp2[3], Float:output[3]);
 native Float:wp_findClosestPointBetweenPaths(Float:origin[3], path[2], Float:output[3]);
@@ -171,6 +173,8 @@ public ThinkNpc(npc)
 	new Float:velocity[3];
 	if (g_follow)
 	{
+		new bool:jump;
+		
 		new Float:target[3];
 		new Float:origin[3], Float:origin2[3];
 		entity_get_vector(npc, EV_VEC_origin, origin);
@@ -198,6 +202,15 @@ public ThinkNpc(npc)
 				new size = ArraySize(path);
 				if (size <= 2)
 				{
+					if (size == 2)
+					{
+						new p = ArrayGetCell(path, 1);
+						if (wp_getType(p) == 1)
+						{
+							jump = true;
+						}
+					}
+					
 					target = origin2;
 					entity_set_int(npc, EV_INT_iuser1, NULL);
 				}
@@ -207,6 +220,11 @@ public ThinkNpc(npc)
 
 					new Float:origin3[3];
 					wp_getOrigin(p, origin3);
+					
+					if (wp_getType(p) == 1)
+					{
+						jump = true;
+					}
 					
 					if (get_distance_f(origin, origin3) <= wp_getRange(p))
 					{
@@ -249,6 +267,12 @@ public ThinkNpc(npc)
 			velocity[0] = avelocity[0];
 			velocity[1] = avelocity[1];
 			
+			if (jump && (entity_get_int(npc, EV_INT_flags) & FL_ONGROUND))
+			{
+				velocity[2] += 300.0;
+				entity_set_int(npc, EV_INT_sequence, ANIM_JUMP);
+			}
+			
 			entity_set_vector(npc, EV_VEC_velocity, velocity);
 			entity_set_vector(npc, EV_VEC_avelocity, velocity);
 			
@@ -261,10 +285,17 @@ public ThinkNpc(npc)
 		}
 	}
 	
-	if (xs_vec_len(velocity) > 1)
-		entity_set_int(npc, EV_INT_sequence, ANIM_RUN);
+	if (entity_get_int(npc, EV_INT_sequence) == ANIM_JUMP && !(entity_get_int(npc, EV_INT_flags) & FL_ONGROUND))
+	{
+		entity_set_int(npc, EV_INT_sequence, ANIM_JUMP)
+	}
 	else
-		entity_set_int(npc, EV_INT_sequence, ANIM_IDLE);
+	{
+		if (xs_vec_len(velocity) > 1)
+			entity_set_int(npc, EV_INT_sequence, ANIM_RUN);
+		else
+			entity_set_int(npc, EV_INT_sequence, ANIM_IDLE);
+	}
 	
 	entity_set_float(npc, EV_FL_nextthink, get_gametime() + 0.05);
 }
@@ -312,38 +343,6 @@ stock findClosestLine(Float:origin[3], Array:path, indexes[2], Float:output[3])
 	}
 	
 	return true;
-}
-
-stock drawLine(id, Float:x1, Float:y1, Float:z1, Float:x2, Float:y2, Float:z2, 
-	sprite, frame=0, rate=0, life=10, width=10, noise=0, color[3]={255,255,255}, alpha=127, scroll=0)
-{
-	message_begin(id ? MSG_ONE_UNRELIABLE : MSG_BROADCAST, SVC_TEMPENTITY, _, id);
-	write_byte(TE_BEAMPOINTS);
-	write_coord_f(x1);
-	write_coord_f(y1);
-	write_coord_f(z1);
-	write_coord_f(x2);
-	write_coord_f(y2);
-	write_coord_f(z2);
-	write_short(sprite);
-	write_byte(frame);
-	write_byte(rate);
-	write_byte(life);
-	write_byte(width);
-	write_byte(noise);
-	write_byte(color[0]);
-	write_byte(color[1]);
-	write_byte(color[2]);
-	write_byte(alpha);
-	write_byte(scroll);
-	message_end();
-}
-
-stock drawLine2(id, Float:start[3], Float:end[3], sprite, frame=0, rate=0, life=10,
-	width=10, noise=0, color[3]={255,255,255}, alpha=127, scroll=0)
-{
-	drawLine(id, start[0], start[1], start[2], end[0], end[1], end[2],
-		sprite, frame, rate, life, width, noise, color, alpha, scroll);
 }
 
 stock Float:seek(ent, Float:target[3], Float:maxspeed)
@@ -455,9 +454,6 @@ stock Float:collisionAvoidance(npc, Float:maxspeed, Float:force)
 		entity_get_vector(ent, EV_VEC_origin, origin);
 		entity_get_vector(ent, EV_VEC_mins, mins);
 		entity_get_vector(ent, EV_VEC_maxs, maxs);
-		
-		xs_vec_mul_scalar(mins, 2.25, mins);
-		xs_vec_mul_scalar(maxs, 2.25, maxs);
 		
 		xs_vec_add(origin, mins, mins);
 		xs_vec_add(origin, maxs, maxs);
@@ -612,4 +608,36 @@ stock Float:distPointSegment(Float:p[3], Float:sp1[3], Float:sp2[3], Float:outpu
 	
 	output = pB;
 	return get_distance_f(p, pB);
+}
+
+stock drawLine(id, Float:x1, Float:y1, Float:z1, Float:x2, Float:y2, Float:z2, 
+	sprite, frame=0, rate=0, life=10, width=10, noise=0, color[3]={255,255,255}, alpha=127, scroll=0)
+{
+	message_begin(id ? MSG_ONE_UNRELIABLE : MSG_BROADCAST, SVC_TEMPENTITY, _, id);
+	write_byte(TE_BEAMPOINTS);
+	write_coord_f(x1);
+	write_coord_f(y1);
+	write_coord_f(z1);
+	write_coord_f(x2);
+	write_coord_f(y2);
+	write_coord_f(z2);
+	write_short(sprite);
+	write_byte(frame);
+	write_byte(rate);
+	write_byte(life);
+	write_byte(width);
+	write_byte(noise);
+	write_byte(color[0]);
+	write_byte(color[1]);
+	write_byte(color[2]);
+	write_byte(alpha);
+	write_byte(scroll);
+	message_end();
+}
+
+stock drawLine2(id, Float:start[3], Float:end[3], sprite, frame=0, rate=0, life=10,
+	width=10, noise=0, color[3]={255,255,255}, alpha=127, scroll=0)
+{
+	drawLine(id, start[0], start[1], start[2], end[0], end[1], end[2],
+		sprite, frame, rate, life, width, noise, color, alpha, scroll);
 }
