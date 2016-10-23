@@ -54,6 +54,8 @@ new g_menuPage = 0;
 new g_currentPoint = NULL;
 new g_aimPoint = NULL;
 
+new g_start, g_goal;
+
 new g_sprBeam1, g_sprBeam4, g_sprArrow;
 
 public plugin_precache()
@@ -71,7 +73,24 @@ public plugin_init()
 	
 	register_forward(FM_PlayerPreThink, "OnPlayerPreThink");
 	
+	register_clcmd("set_start", "CmdSetStart");
+	register_clcmd("set_goal", "CmdSetGoal");
+	register_clcmd("astar", "CmdAStar");
+	
 	set_task(0.5, "ShowWaypoints", 0, .flags="b");
+	
+	new heap[10+1], size = 0;
+	new Float:cost[10] = {124.0, 59.0, 47.0, 259.0, 53.0, 273.0, 122.0, 254.0, 210.0, 83.0};
+	
+	for (new i = 0; i < sizeof cost; i++)
+	{
+		heapInsert(i, heap, size, cost);
+	}
+	
+	for (new i = 1; i <= size; i++)
+	{
+		server_print("heap[%d] = %d, cost = %.f", i, heap[i], cost[heap[i]]);
+	}
 	
 	loadWaypoints();
 }
@@ -87,6 +106,38 @@ public CmdWaypointMenu(id)
 	g_editor = id;
 	ShowWaypointMenu(id);
 	return PLUGIN_HANDLED;
+}
+
+public CmdSetStart(id)
+{
+	g_start = g_currentPoint;
+}
+
+public CmdSetGoal(id)
+{
+	g_goal = g_currentPoint;
+}
+
+public CmdAStar(id)
+{
+	new Array:path = aStar(g_start, g_goal);
+	if (path != Invalid_Array)
+	{
+		new size = ArraySize(path);
+		new point, point2;
+		
+		for (new i = 0; i < size-1; i++)
+		{
+			point = ArrayGetCell(path, i);
+			point2 = ArrayGetCell(path, i+1);
+			
+			drawLine2(id, g_wayPoint[point], g_wayPoint[point2], g_sprBeam4, .life=100, .width=10, .color={0, 200, 200}, .alpha=255);
+		}
+	}
+	else
+	{
+		client_print(id, print_chat, "haha");
+	}
 }
 
 public client_disconnected(id)
@@ -684,6 +735,162 @@ public HandleAutoDistMenu(id, menu, item)
 	ShowWaypointMenu(id);
 }
 
+stock Array:aStar(start, goal)
+{
+	new closedList[MAX_POINTS >> 5];
+	new openListBits[MAX_POINTS >> 5];
+	
+	static openList[MAX_POINTS + 1];
+	static size; size = 0;
+	
+	static cameFrom[MAX_POINTS];
+	static Float:gCost[MAX_POINTS], Float:fCost[MAX_POINTS];
+	
+	for (new i = 0; i < g_wayCount; i++)
+	{
+		cameFrom[i] = NULL;
+	}
+	
+	gCost[start] = 0.0;
+	fCost[start] = heuristicCost(start, goal);
+	openList[++size] = start;
+	setArrayBits(openListBits, start);
+	
+	new current, neighbor;
+	new Float:tentativeCost;
+	
+	while (size)
+	{
+		current = heapGetMin(openList);
+		
+		// later...
+		if (current == goal)
+		{
+			new Array:path = ArrayCreate(1);
+			ArrayPushCell(path, current);
+			
+			while (cameFrom[current] != NULL)
+			{
+				current = cameFrom[current];
+				ArrayInsertCellBefore(path, 0, current);
+			}
+			
+			return path;
+		}
+		
+		// Remove from open list
+		heapDeleteMin(openList, size, fCost);
+		unsetArrayBits(openListBits, current);
+		
+		// Add to closed list
+		setArrayBits(closedList, current);
+		
+		// Get the neighbors of current
+		for (new i = 0; i < MAX_PATHS; i++)
+		{
+			neighbor = g_wayPaths[current][i];
+			if (neighbor == NULL)
+				continue;
+			
+			if (getArrayBits(closedList, neighbor))
+				continue;
+			
+			if (!isReachable(g_wayPoint[current], g_wayPoint[neighbor], IGNORE_MONSTERS))
+				continue;
+			
+			tentativeCost = gCost[current] + get_distance_f(g_wayPoint[current], g_wayPoint[neighbor]);
+			
+			if (!getArrayBits(openListBits, neighbor))
+			{
+				heapInsert(neighbor, openList, size, fCost);
+				setArrayBits(openListBits, neighbor);
+			}
+			else if (tentativeCost >= gCost[neighbor])
+				continue;
+			
+			cameFrom[neighbor] = current;
+			gCost[neighbor] = tentativeCost;
+			fCost[neighbor] = tentativeCost + heuristicCost(neighbor, goal);
+		}
+	}
+	
+	return Invalid_Array;
+}
+
+stock heapGetMin(heap[])
+{
+	return heap[1];
+}
+
+stock heapInsert(element, heap[], &size, const Float:cost[])
+{
+	heap[++size] = element;
+	heapSwimUp(size, heap, cost);
+}
+
+stock heapDeleteMin(heap[], &size, const Float:cost[])
+{
+	new min = heap[1];
+	heap[1] = heap[size--];
+	heapSinkDown(1, heap, size, cost);
+	
+	return min;
+}
+
+stock heapSwimUp(i, heap[], const Float:cost[])
+{
+	new tmp;
+	
+	while (i / 2 > 0)
+	{
+		if (cost[heap[i]] < cost[heap[i/2]])
+		{
+			tmp = heap[i/2];
+			heap[i/2] = heap[i];
+			heap[i] = tmp;
+		}
+		
+		i = i / 2;
+	}
+}
+
+stock heapSinkDown(i, heap[], size, const Float:cost[])
+{
+	new mc, tmp;
+	
+	while ((i * 2) <= size)
+	{
+		mc = heapMinChild(i, heap, size, cost);
+		
+		if (cost[heap[i]] > cost[heap[mc]])
+		{
+			tmp = heap[i];
+			heap[i] = heap[mc];
+			heap[mc] = tmp;
+		}
+		
+		i = mc;
+	}
+}
+
+stock heapMinChild(i, heap[], size, const Float:cost[])
+{
+	if (i*2+1 > size)
+		return i * 2;
+	else
+	{
+		if (cost[heap[i*2]] < cost[heap[i*2+1]])
+			return i * 2;
+		else
+			return i * 2 + 1;
+	}
+}
+
+stock Float:heuristicCost(start, goal)
+{
+	return get_distance_f(g_wayPoint[start], g_wayPoint[goal]);
+}
+
 // Check whether a point is valid
 stock bool:isPointValid(point)
 {
@@ -828,6 +1035,7 @@ stock removePoint(point)
 	}
 }
 
+// Get waypoint flags string
 stock getPointFlagsString(point, output[], maxLen)
 {
 	new flags = g_wayFlags[point];
@@ -875,6 +1083,7 @@ stock findClosestPoint(Float:origin[3], Float:distance=999999.0)
 	return point;
 }
 
+// Get aiming waypoint
 stock getAimPoint(ent, Float:distance=999999.0, bits[MAX_POINTS >> 5]={-1, ...})
 {
 	new Float:start[3], Float:end[3];
@@ -883,7 +1092,7 @@ stock getAimPoint(ent, Float:distance=999999.0, bits[MAX_POINTS >> 5]={-1, ...})
 	pev(ent, pev_view_ofs, end);
 	xs_vec_add(start, end, start);
 	
-	velocity_by_aim(ent, 99999, end);
+	velocity_by_aim(ent, 999999, end);
 	xs_vec_add(end, start, end);
 	
 	new best = NULL;
@@ -898,7 +1107,7 @@ stock getAimPoint(ent, Float:distance=999999.0, bits[MAX_POINTS >> 5]={-1, ...})
 		if (!getArrayBits(bits, i))
 			continue;
 		
-		// Get the closest point from a ray(start, end) to a waypoint center
+		// Get the closest point from a ray(start, end) to waypoint center
 		distPointSegment(g_wayPoint[i], start, end, output);
 		
 		if (g_wayFlags[i] & WAYPOINT_DUCK)
