@@ -974,6 +974,17 @@ stock removePath(point, point2)
 	return NULL;
 }
 
+stock getPathFlags(point, point2)
+{
+	new i = getPath(point, point2);
+	if (i != NULL)
+	{
+		return g_wayPathFlags[point][i];
+	}
+	
+	return 0;
+}
+
 // Set flags for a path
 stock setPathFlags(point, i, flags)
 {
