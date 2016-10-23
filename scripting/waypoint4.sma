@@ -1070,7 +1070,7 @@ stock Float:findClosestPointBetweenPaths(Float:origin[3], path[2], Float:output[
 	return minDist;
 }
 
-stock getAimPoint(ent, points[MAX_POINTS >> 5]={-1, ...}, Float:distance=9999.0)
+stock getAimPoint(ent, Float:distance=999999.0, points[MAX_POINTS >> 5]={-1, ...})
 {
 	new Float:start[3], Float:end[3];
 	pev(ent, pev_origin, start);
@@ -1109,33 +1109,33 @@ stock getAimPoint(ent, points[MAX_POINTS >> 5]={-1, ...}, Float:distance=9999.0)
 	return min;
 }
 
-stock Float:distPointSegment(Float:p[3], Float:sp1[3], Float:sp2[3], Float:output[3])
+stock Float:distPointSegment(Float:origin[3], Float:begin[3], Float:end[3], Float:output[3])
 {
 	new Float:v[3], Float:w[3];
-	xs_vec_sub(sp2, sp1, v);
-	xs_vec_sub(p, sp1, w);
+	xs_vec_sub(end, begin, v);
+	xs_vec_sub(origin, begin, w);
 	
 	new Float:c1 = xs_vec_dot(w, v);
 	if (c1 <= 0)
 	{
-		output = sp1;
-		return get_distance_f(p, sp1);
+		output = begin;
+		return get_distance_f(origin, begin);
 	}
 	
 	new Float:c2 = xs_vec_dot(v, v);
 	if (c2 <= c1)
 	{
-		output = sp2;
-		return get_distance_f(p, sp2);
+		output = end;
+		return get_distance_f(origin, end);
 	}
 	
 	new Float:b = c1 / c2;
 	new Float:pB[3];
 	xs_vec_mul_scalar(v, b, pB);
-	xs_vec_add(sp1, pB, pB);
+	xs_vec_add(begin, pB, pB);
 	
 	output = pB;
-	return get_distance_f(p, pB);
+	return get_distance_f(origin, pB);
 }
 
 stock drawLine(id, Float:x1, Float:y1, Float:z1, Float:x2, Float:y2, Float:z2, 
