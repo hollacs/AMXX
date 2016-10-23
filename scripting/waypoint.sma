@@ -2,17 +2,18 @@
 #include <fakemeta>
 #include <xs>
 
-#define DEBUG
+//#define DEBUG
 
 #define NULL -1
 
 #define MAX_POINTS 1280 // Max waypoints
 #define MAX_PATHS 10 // Max paths in a waypoint
-#define MAX_POINTS_SHOWN 70 // Max waypoints will be shown
+#define MAX_POINTS_SHOWN 50 // Max waypoints will be shown
 
 #define AUTO_DIST_DEFAULT 132.0 // Default value of auto waypoint distance
 #define AUTOPATH_DIST_DEFAULT 140.0 // Default value of auto path distance
 #define WAYPOINT_RANGE_DEFAULT 32.0 // Default value of waypoint range
+#define WAYPOINT_RANGE_SIDES 6 // Number of polygon sides for displaying waypoint range
 
 #define getArrayBits(%1,%2) (%1[%2 >> 5] & (1 << (%2 & 31)))
 #define setArrayBits(%1,%2) (%1[%2 >> 5] |= (1 << (%2 & 31)))
@@ -71,7 +72,7 @@ public plugin_init()
 	
 	register_forward(FM_PlayerPreThink, "OnPlayerPreThink");
 	
-	set_task(0.5, "DrawWaypoints", 0, .flags="b");
+	set_task(0.5, "ShowWaypoints", 0, .flags="b");
 }
 
 public CmdWaypointMenu(id)
@@ -89,10 +90,12 @@ public CmdWaypointMenu(id)
 
 public client_disconnected(id)
 {
-	
+	if (g_editor == id)
+		g_editor = 0;
 }
 
-public DrawWaypoints()
+// Show waypoints
+public ShowWaypoints()
 {
 	if (!g_editor)
 		return;
@@ -103,47 +106,107 @@ public DrawWaypoints()
 	static points[MAX_POINTS], Float:dists[MAX_POINTS];
 	
 	// Insertion sort
-	for (new i = 0, j, Float:d, p; i < g_wayCount; i++)
 	{
-		j = i-1;
-		p = i;
-		d = get_distance_f(origin, g_wayPoint[i]);
-		
-		points[i] = p;
-		dists[i] = d;
-		
-		while (j >= 0 && dists[j] > d)
+		new p, Float:d;
+		for (new i = 0, j; i < g_wayCount; i++)
 		{
-			points[j+1] = points[j];
-			dists[j+1] = dists[j];
-			j = j - 1;
+			j = i-1;
+			p = i;
+			d = get_distance_f(origin, g_wayPoint[i]);
+			
+			points[i] = p;
+			dists[i] = d;
+			
+			while (j >= 0 && dists[j] > d)
+			{
+				points[j+1] = points[j];
+				dists[j+1] = dists[j];
+				j = j - 1;
+			}
+			
+			points[j+1] = p;
+			dists[j+1] = d;
 		}
-		
-		points[j+1] = p;
-		dists[j+1] = d;
 	}
 	
-	new maxShown = min(g_wayCount, MAX_POINTS_SHOWN);
-	
-	for (new i = 0, index; i < maxShown; i++)
+	new maxPointsShown = min(g_wayCount, MAX_POINTS_SHOWN);
 	{
-		index = points[i];
+		new index, flags, Float:range;
+		new Float:size, color[3];
+		new Float:pos[3], Float:pos1[3], Float:pos2[3];
 		
-		if (index == g_currentPoint)
+		for (new i = 0, j; i < maxPointsShown; i++)
 		{
-			set_hudmessage(0, 200, 50, 0.4, 0.25, 0, 0.0, 0.5, 0.0, 0.0, 4);
-			show_hudmessage(g_editor, "Waypoint #%d^nXYZ: {%.2f, %.2f, %.2f}^nFlags: none^nRange: %.f", 
-							index, 
-							g_wayPoint[index][0], g_wayPoint[index][1], g_wayPoint[index][2],
-							g_wayRange[index]);
+			index = points[i];
+			flags = g_wayFlags[index];
+			pos = g_wayPoint[index];
+			
+			// Default style
+			size = 36.0;
+			color = {0, 255, 0};
+			
+			if (flags & WAYPOINT_DUCK)
+				size = 20.0;
+			if (flags & WAYPOINT_JUMP)
+				color = {0, 200, 100};
+			
+			if (index == g_currentPoint)
+			{
+				range = g_wayRange[index];
+				
+				set_hudmessage(0, 200, 50, 0.4, 0.25, 0, 0.0, 0.5, 0.0, 0.0, 4);
+				show_hudmessage(g_editor, "Waypoint #%d^nXYZ: {%.2f, %.2f, %.2f}^nFlags: none^nRange: %.f", 
+								index, pos[0], pos[1], pos[2], g_wayRange[index]);
+				
+				if (range <= 0.0)
+				{
+					// Draw a cross if no range 
+					drawLine(g_editor, 
+							pos[0]+16.0, pos[1], pos[2]-size/2.0,
+							pos[0]-16.0, pos[1], pos[2]-size/2.0,
+							g_sprBeam4, .life=5, .width=10, .color={0, 0, 255}, .alpha=255);
+					
+					drawLine(g_editor, 
+							pos[0], pos[1]+16.0, pos[2]-size/2.0,
+							pos[0], pos[1]-16.0, pos[2]-size/2.0,
+							g_sprBeam4, .life=5, .width=10, .color={0, 0, 255}, .alpha=255);
+				}
+				else
+				{
+					// Draw a polygon to display waypoint range
+					
+					// first
+					pos2[0] = floatcos(360 / 6 * float(WAYPOINT_RANGE_SIDES) - 180.0, degrees) * range + g_wayPoint[index][0];
+					pos2[1] = floatsin(360 / 6 * float(WAYPOINT_RANGE_SIDES) - 180.0, degrees) * range + g_wayPoint[index][1];
+					pos2[2] = g_wayPoint[index][2] - size / 2.0;
+					
+					for (j = 1; j <= WAYPOINT_RANGE_SIDES; j++)
+					{
+						pos1[0] = floatcos(360 / 6 * float(j) - 180.0, degrees) * range + g_wayPoint[index][0];
+						pos1[1] = floatsin(360 / 6 * float(j) - 180.0, degrees) * range + g_wayPoint[index][1];
+						pos1[2] = g_wayPoint[index][2] - size / 2.0;
+						
+						drawLine2(g_editor, pos1, pos2, g_sprBeam4, .life=5, .width=10, .color={0, 0, 255}, .alpha=255);
+						
+						pos2 = pos1;
+					}
+				}
+			}
+			
+			drawLine(g_editor,
+					g_wayPoint[index][0], g_wayPoint[index][1], g_wayPoint[index][2]-size,
+					g_wayPoint[index][0], g_wayPoint[index][1], g_wayPoint[index][2]+size,
+					g_sprBeam4, .life=5, .width=20, .color=color, .alpha=255);
+			
+			#if defined DEBUG
+			client_print(g_editor, print_console, "points[%d] = %d, dists[%d] = %.2f", i, points[i], i, dists[i]);
+			#endif
 		}
-		
-		#if defined DEBUG
-		client_print(g_editor, print_console, "points[%d] = %d, dists[%d] = %.2f", i, points[i], i, dists[i]);
-		#endif
 	}
-	
-	client_print(g_editor, print_console, "----------");
+	#if defined DEBUG
+	if (maxPointsShown)
+		client_print(g_editor, print_console, "--------------------");
+	#endif
 	
 	g_currentPoint = findClosestPoint(origin, 64.0);
 }
@@ -293,7 +356,7 @@ public HandleWaypointMenu(id, menu, item)
 // Waypoint type menu
 public ShowTypeMenu(id)
 {
-	static const types[] = {0, 1};
+	static const types[] = {0};
 	
 	new menu = menu_create("Waypoint Type", "HandleTypeMenu");
 	
@@ -327,8 +390,10 @@ public HandleTypeMenu(id, menu, item)
 	pev(id, pev_origin, origin);
 	
 	new flags = str_to_num(info);
+	if (pev(id, pev_flags) & FL_DUCKING)
+		flags |= WAYPOINT_DUCK;
+		
 	new point = createPoint(origin, g_range, flags);
-	
 	if (point == NULL)
 		client_print(id, print_chat, "Cannot create more waypoints.");
 	else
@@ -345,8 +410,13 @@ public ShowPathMenu(id)
 	menu_additem(menu, "Outgoing path");
 	menu_additem(menu, "Incoming path");
 	menu_additem(menu, "Both ways");
-	menu_addblank2(menu);
-	menu_additem(menu, "Jump path");
+	
+	new point = g_currentPoint;
+	if (isPointValid(point) && (g_wayFlags[point] & WAYPOINT_JUMP))
+	{
+		menu_addblank2(menu);
+		menu_additem(menu, "Jump path (Outgoing)");
+	}
 	
 	menu_setprop(menu, MPROP_NUMBER_COLOR, "\y");
 	menu_display(id, menu);
@@ -667,4 +737,38 @@ stock addPathFlags(point, i, flags)
 stock removePathFlags(point, i, flags)
 {
 	g_wayPathFlags[point][i] &= ~flags;
+}
+
+// Draw a line
+stock drawLine(id, Float:x1, Float:y1, Float:z1, Float:x2, Float:y2, Float:z2, 
+	sprite, frame=0, rate=0, life=10, width=10, noise=0, color[3]={255,255,255}, alpha=127, scroll=0)
+{
+	message_begin(id ? MSG_ONE_UNRELIABLE : MSG_BROADCAST, SVC_TEMPENTITY, _, id);
+	write_byte(TE_BEAMPOINTS);
+	write_coord_f(x1);
+	write_coord_f(y1);
+	write_coord_f(z1);
+	write_coord_f(x2);
+	write_coord_f(y2);
+	write_coord_f(z2);
+	write_short(sprite);
+	write_byte(frame);
+	write_byte(rate);
+	write_byte(life);
+	write_byte(width);
+	write_byte(noise);
+	write_byte(color[0]);
+	write_byte(color[1]);
+	write_byte(color[2]);
+	write_byte(alpha);
+	write_byte(scroll);
+	message_end();
+}
+
+// Draw a line with vector3D
+stock drawLine2(id, Float:start[3], Float:end[3], sprite, frame=0, rate=0, life=10,
+	width=10, noise=0, color[3]={255,255,255}, alpha=127, scroll=0)
+{
+	drawLine(id, start[0], start[1], start[2], end[0], end[1], end[2],
+		sprite, frame, rate, life, width, noise, color, alpha, scroll);
 }
