@@ -10,7 +10,7 @@
 #define MAX_PATHS 10 // Max paths in a waypoint
 #define MAX_POINTS_SHOWN 50 // Max waypoints that will be shown
 
-#define AUTO_DIST_DEFAULT 132.0 // Default value of auto waypoint distance
+#define AUTO_DIST_DEFAULT 124.0 // Default value of auto waypoint distance
 #define AUTOPATH_DIST_DEFAULT 190.0 // Default value of auto path distance
 #define WAYPOINT_RANGE_DEFAULT 32.0 // Default value of waypoint range
 #define WAYPOINT_RANGE_SIDES 6 // Number of polygon sides for displaying waypoint range
@@ -72,6 +72,8 @@ public plugin_init()
 	register_forward(FM_PlayerPreThink, "OnPlayerPreThink");
 	
 	set_task(0.5, "ShowWaypoints", 0, .flags="b");
+	
+	loadWaypoints();
 }
 
 public CmdWaypointMenu(id)
@@ -93,10 +95,34 @@ public client_disconnected(id)
 		g_editor = 0;
 }
 
+public OnPlayerPreThink(id)
+{
+	if (g_auto && g_editor == id && is_user_alive(id) && (pev(id, pev_flags) & FL_ONGROUND))
+	{
+		new Float:origin[3];
+		pev(id, pev_origin, origin);
+		
+		new point = findClosestPoint(origin, g_autoDist);
+		if (point == NULL)
+		{
+			new flags;
+			if (pev(id, pev_flags) & FL_DUCKING)
+				flags |= WAYPOINT_DUCK;
+			
+			point = createPoint(origin, g_range, flags);
+			if (point != NULL)
+			{
+				autoPaths(point);
+				client_print(0, print_chat, "Create waypoint #%d", point);
+			}
+		}
+	}
+}
+
 // Show waypoints
 public ShowWaypoints()
 {
-	if (!g_editor)
+	if (!g_editor || !g_show)
 		return;
 	
 	new Float:origin[3];
@@ -207,12 +233,12 @@ public ShowWaypoints()
 					if (getPath(k, index) != NULL) // Both way
 					{
 						drawLine2(g_editor, pos, pos2,
-							g_sprBeam1, .life=5, .width=10, .noise=5, .color={200, 200, 0}, .alpha=255);
+							g_sprBeam1, .life=5, .width=10, .noise=5, .color={200, 200, 0}, .alpha=255, .scroll=5);
 					}
 					else // Outcoming
 					{
 						drawLine2(g_editor, pos, pos2,
-							g_sprBeam1, .life=5, .width=10, .noise=5, .color={200, 50, 0}, .alpha=255);
+							g_sprBeam1, .life=5, .width=10, .noise=5, .color={200, 50, 0}, .alpha=255, .scroll=5);
 					}
 					
 					if (g_wayPathFlags[index][j] & WAYPATH_JUMP)
@@ -220,7 +246,7 @@ public ShowWaypoints()
 						drawLine(g_editor, 
 							pos[0], pos[1], pos[2]+size/2.0,
 							pos2[0], pos2[1], pos2[2]+size/2.0,
-							g_sprBeam1, .life=5, .width=10, .noise=5, .color={200, 0, 200}, .alpha=255);
+							g_sprBeam1, .life=5, .width=10, .noise=5, .color={200, 0, 200}, .alpha=255, .scroll=5);
 					}
 				}
 				
@@ -230,7 +256,7 @@ public ShowWaypoints()
 					if (getPath(j, index) != NULL && getPath(index, j) == NULL)
 					{
 						drawLine2(g_editor, pos, g_wayPoint[j],
-							g_sprBeam1, .life=5, .width=10, .noise=5, .color={200, 0, 0}, .alpha=255);
+							g_sprBeam1, .life=5, .width=10, .noise=5, .color={200, 0, 0}, .alpha=255, .scroll=5);
 					}
 				}
 			}
@@ -393,11 +419,14 @@ public HandleWaypointMenu(id, menu, item)
 		}
 		case 10: // Save
 		{
-			
+			saveWaypoints();
+			client_print(0, print_chat, "Saved %d waypoints.", g_wayCount);
 		}
 		case 11: // Load
 		{
-			
+			g_wayCount = 0;
+			loadWaypoints();
+			client_print(0, print_chat, "Loaded %d waypoints.", g_wayCount);
 		}
 	}
 	
@@ -624,7 +653,7 @@ public HandlePathDistMenu(id, menu, item)
 // Choose auto waypoint distance menu
 public ShowAutoDistMenu(id)
 {
-	static distances[] = {100, 116, 132, 148, 164, 180, 200};
+	static distances[] = {100, 108, 116, 124, 132, 148, 164, 180, 200};
 	
 	new menu = menu_create("Auto Waypoint Distance", "HandleAutoDistMenu");
 	new info[4];
@@ -662,6 +691,98 @@ stock bool:isPointValid(point)
 		return false;
 	
 	return true;
+}
+
+stock saveWaypoints()
+{
+	new mapName[32];
+	get_mapname(mapName, charsmax(mapName));
+	
+	new filePath[100];
+	get_localinfo("amxx_configsdir", filePath, charsmax(filePath));
+	format(filePath, charsmax(filePath), "%s/waypoints/%s.wp", filePath, mapName);
+	
+	new fp = fopen(filePath, "w");
+	
+	for (new i = 0, j; i < g_wayCount; i++)
+	{
+		fprintf(fp, "%f %f %f ", g_wayPoint[i][0], g_wayPoint[i][1], g_wayPoint[i][2]);
+		
+		fprintf(fp, "%d %.f ", g_wayFlags[i], g_wayRange[i]);
+		
+		for (j = 0; j < MAX_PATHS; j++)
+		{
+			fprintf(fp, "%d ", g_wayPaths[i][j]);
+		}
+		
+		for (j = 0; j < MAX_PATHS; j++)
+		{
+			fprintf(fp, "%d ", g_wayPathFlags[i][j]);
+		}
+		
+		fprintf(fp, "^n");
+	}
+	
+	fclose(fp);
+}
+
+stock loadWaypoints()
+{
+	new mapName[32];
+	get_mapname(mapName, charsmax(mapName));
+	
+	new filePath[100];
+	get_localinfo("amxx_configsdir", filePath, charsmax(filePath));
+	format(filePath, charsmax(filePath), "%s/waypoints/%s.wp", filePath, mapName);
+	
+	new fp = fopen(filePath, "r");
+	
+	new i, point;
+	new buffer[256], string[20];
+	new Float:origin[3];
+	
+	while (!feof(fp))
+	{
+		fgets(fp, buffer, charsmax(buffer));
+		
+		if (!buffer[0]) continue;
+		
+		// Get origin
+		for (i = 0; i < 3; i++)
+		{
+			argbreak(buffer, string, charsmax(string), buffer, charsmax(buffer));
+			origin[i] = str_to_float(string);
+		}
+		
+		// Create waypoint
+		point = createPoint(origin);
+		if (point != NULL)
+		{
+			// Get flags
+			argbreak(buffer, string, charsmax(string), buffer, charsmax(buffer));
+			g_wayFlags[point] = str_to_num(string);
+			
+			// Get range
+			argbreak(buffer, string, charsmax(string), buffer, charsmax(buffer));
+			g_wayRange[point] = str_to_float(string);
+			
+			// Get paths
+			for (i = 0; i < MAX_PATHS; i++)
+			{
+				argbreak(buffer, string, charsmax(string), buffer, charsmax(buffer));
+				g_wayPaths[point][i] = str_to_num(string);
+			}
+			
+			// Get path flags
+			for (i = 0; i < MAX_PATHS; i++)
+			{
+				argbreak(buffer, string, charsmax(string), buffer, charsmax(buffer));
+				g_wayPathFlags[point][i] = str_to_num(string);
+			}
+		}
+	}
+	
+	fclose(fp);
 }
 
 // Create a waypoint
