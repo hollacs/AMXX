@@ -2,45 +2,57 @@
 #include <fakemeta>
 #include <xs>
 
+#define DEBUG
+
 #define NULL -1
-#define MAX_POINTS 1280
-#define MAX_PATHS 10
+
+#define MAX_POINTS 1280 // Max waypoints
+#define MAX_PATHS 10 // Max paths in a waypoint
+#define MAX_POINTS_SHOWN 70 // Max waypoints will be shown
+
+#define AUTO_DIST_DEFAULT 132.0 // Default value of auto waypoint distance
+#define AUTOPATH_DIST_DEFAULT 140.0 // Default value of auto path distance
+#define WAYPOINT_RANGE_DEFAULT 32.0 // Default value of waypoint range
 
 #define getArrayBits(%1,%2) (%1[%2 >> 5] & (1 << (%2 & 31)))
 #define setArrayBits(%1,%2) (%1[%2 >> 5] |= (1 << (%2 & 31)))
 #define unsetArrayBits(%1,%2) (%1[%2 >> 5] &= ~(1 << (%2 & 31)))
 
+// Waypoint flags
 enum (<<= 1)
 {
     WAYPOINT_JUMP = 1,
 	WAYPOINT_DUCK
 };
 
+// Waypoint path flags
 enum (<<= 1)
 {
 	WAYPATH_JUMP = 1,
 	WAYPATH_DUCK
 };
 
+// Waypoint flags name
 new const WAYPOINT_FLAGS[][] = {"Jump", "Duck"};
 
 // HAPYY AMXX ^O^
 new Float:g_wayPoint[MAX_POINTS][3];
-new Float:g_wayRange[MAX_POINTS][MAX_PATHS];
+new Float:g_wayRange[MAX_POINTS];
+new g_wayFlags[MAX_POINTS];
 new g_wayPaths[MAX_POINTS][MAX_PATHS];
 new g_wayPathFlags[MAX_POINTS][MAX_PATHS];
-new g_wayFlags[MAX_POINTS];
-new g_wayCount;
+new g_wayCount = 0;
 
-new g_editor;
-new Float:g_range;
-new g_auto;
-new Float:g_autoDist;
-new Float:g_autoPathDist;
-new g_menuPage;
+new g_editor = 0;
+new bool:g_show = false;
+new bool:g_auto = false;
+new Float:g_autoDist = AUTO_DIST_DEFAULT;
+new Float:g_autoPathDist = AUTOPATH_DIST_DEFAULT;
+new Float:g_range = WAYPOINT_RANGE_DEFAULT;
+new g_menuPage = 0;
 
-new g_currentPoint;
-new g_aimPoint;
+new g_currentPoint = NULL;
+new g_aimPoint = NULL;
 
 new g_sprBeam1, g_sprBeam4, g_sprArrow;
 
@@ -75,6 +87,68 @@ public CmdWaypointMenu(id)
 	return PLUGIN_HANDLED;
 }
 
+public client_disconnected(id)
+{
+	
+}
+
+public DrawWaypoints()
+{
+	if (!g_editor)
+		return;
+	
+	new Float:origin[3];
+	pev(g_editor, pev_origin, origin);
+	
+	static points[MAX_POINTS], Float:dists[MAX_POINTS];
+	
+	// Insertion sort
+	for (new i = 0, j, Float:d, p; i < g_wayCount; i++)
+	{
+		j = i-1;
+		p = i;
+		d = get_distance_f(origin, g_wayPoint[i]);
+		
+		points[i] = p;
+		dists[i] = d;
+		
+		while (j >= 0 && dists[j] > d)
+		{
+			points[j+1] = points[j];
+			dists[j+1] = dists[j];
+			j = j - 1;
+		}
+		
+		points[j+1] = p;
+		dists[j+1] = d;
+	}
+	
+	new maxShown = min(g_wayCount, MAX_POINTS_SHOWN);
+	
+	for (new i = 0, index; i < maxShown; i++)
+	{
+		index = points[i];
+		
+		if (index == g_currentPoint)
+		{
+			set_hudmessage(0, 200, 50, 0.4, 0.25, 0, 0.0, 0.5, 0.0, 0.0, 4);
+			show_hudmessage(g_editor, "Waypoint #%d^nXYZ: {%.2f, %.2f, %.2f}^nFlags: none^nRange: %.f", 
+							index, 
+							g_wayPoint[index][0], g_wayPoint[index][1], g_wayPoint[index][2],
+							g_wayRange[index]);
+		}
+		
+		#if defined DEBUG
+		client_print(g_editor, print_console, "points[%d] = %d, dists[%d] = %.2f", i, points[i], i, dists[i]);
+		#endif
+	}
+	
+	client_print(g_editor, print_console, "----------");
+	
+	g_currentPoint = findClosestPoint(origin, 64.0);
+}
+
+// Waypoint menu
 public ShowWaypointMenu(id)
 {
 	new text[64];
@@ -100,11 +174,7 @@ public ShowWaypointMenu(id)
 	formatex(text, charsmax(text), "Auto waypoint distance: \y%.f", g_autoDist);
 	menu_additem(menu, text);
 	
-	if (g_editor)
-		formatex(text, charsmax(text), "Hide waypoints");
-	else
-		formatex(text, charsmax(text), "Show waypoints");
-		
+	formatex(text, charsmax(text), "Show waypoints: %s", g_show ? "\yOn" : "\dOff");
 	menu_additem(menu, text);
 	
 	menu_additem(menu, "Save");
@@ -141,7 +211,7 @@ public HandleWaypointMenu(id, menu, item)
 		{
 			new point = g_currentPoint;
 			if (!isPointValid(point))
-				client_print(0, print_chat, "Cannot find current waypoint.");
+				client_print(id, print_chat, "Cannot find current waypoint.");
 			else
 			{
 				removePoint(point);
@@ -160,20 +230,20 @@ public HandleWaypointMenu(id, menu, item)
 			
 			if (!isPointValid(point))
 			{
-				client_print(0, print_chat, "Cannot find current waypoint.");
+				client_print(id, print_chat, "Cannot find current waypoint.");
 			}
 			else if (!isPointValid(point2))
 			{
-				client_print(0, print_chat, "Cannot find aim waypoint.");
+				client_print(id, print_chat, "Cannot find aim waypoint.");
 			}
 			else
 			{
-				if (getPath(point2, point))
+				if (getPath(point2, point) != NULL)
 				{
 					removePath(point2, point);
 					client_print(0, print_chat, "Disconnect waypoints #%d -> #%d.", point2, point);
 				}
-				else if (getPath(point, point2))
+				else if (getPath(point, point2) != NULL)
 				{
 					removePath(point, point2);
 					client_print(0, print_chat, "Disconnect waypoints #%d -> #%d.", point, point2);
@@ -187,12 +257,40 @@ public HandleWaypointMenu(id, menu, item)
 		case 5: // Waypoint range
 		{
 			ShowRangeMenu(id);
+			return;
+		}
+		case 6: // Auto path distance
+		{
+			ShowPathDistMenu(id);
+			return;
+		}
+		case 7: // Auto waypoint On/Off
+		{
+			g_auto = !g_auto;
+		}
+		case 8: // Auto waypoint distance
+		{
+			ShowAutoDistMenu(id);
+			return;
+		}
+		case 9: // Show/Hide waypoints
+		{
+			g_show = !g_show;
+		}
+		case 10: // Save
+		{
+			
+		}
+		case 11: // Load
+		{
+			
 		}
 	}
 	
 	ShowWaypointMenu(id);
 }
 
+// Waypoint type menu
 public ShowTypeMenu(id)
 {
 	static const types[] = {0, 1};
@@ -232,13 +330,14 @@ public HandleTypeMenu(id, menu, item)
 	new point = createPoint(origin, g_range, flags);
 	
 	if (point == NULL)
-		client_print(0, print_chat, "Cannot create more waypoints.");
+		client_print(id, print_chat, "Cannot create more waypoints.");
 	else
-		client_print(0, print_chat, "Create waypoint #%d", point);
+		client_print(0, print_chat, "Create waypoint #%d.", point);
 	
 	ShowWaypointMenu(id);
 }
 
+// Create path menu
 public ShowPathMenu(id)
 {
 	new menu = menu_create("Create Path", "HandlePathMenu");
@@ -246,6 +345,8 @@ public ShowPathMenu(id)
 	menu_additem(menu, "Outgoing path");
 	menu_additem(menu, "Incoming path");
 	menu_additem(menu, "Both ways");
+	menu_addblank2(menu);
+	menu_additem(menu, "Jump path");
 	
 	menu_setprop(menu, MPROP_NUMBER_COLOR, "\y");
 	menu_display(id, menu);
@@ -259,62 +360,176 @@ public HandlePathMenu(id, menu, item)
 		return;
 	
 	new point = g_currentPoint;
+	new point2 = g_aimPoint;
+	
 	if (!isPointValid(point))
 	{
 		client_print(id, print_chat, "Cannot find current waypoint.");
-		return;
 	}
-	
-	new point2 = g_aimPoint;
-	if (!isPointValid(point2))
+	else if (!isPointValid(point2))
 	{
 		client_print(id, print_chat, "Cannot find aim waypoint.");
-		return;
+	}
+	else
+	{
+		switch (item)
+		{
+			case 0: // Outgoing
+			{
+				if (createPath(point, point2) != NULL)
+				{
+					removePath(point2, point);
+					client_print(0, print_chat, "Connect waypoints #%d -> #%d.", point, point2);
+				}
+			}
+			case 1: // Incoming
+			{
+				if (createPath(point2, point) != NULL)
+				{
+					removePath(point, point2);
+					client_print(0, print_chat, "Connect waypoints #%d -> #%d.", point2, point);
+				}
+			}
+			case 2: // Both ways
+			{
+				createPath(point, point2);
+				createPath(point2, point);
+				
+				client_print(0, print_chat, "Connect waypoints #%d <-> #%d.", point, point2);
+			}
+			case 4: // Jump path
+			{
+				if (~g_wayFlags[point] & WAYPOINT_JUMP)
+				{
+					client_print(id, print_chat, "Current waypoint is not a jump point.");
+				}
+				else
+				{
+					new i = createPath(point, point2);
+					if (i != NULL)
+					{
+						addPathFlags(point, i, WAYPATH_JUMP);
+						client_print(0, print_chat, "Connect waypoints with jump flag #%d -> #%d.", point, point2);
+					}
+				}
+			}
+		}
 	}
 	
-	switch (item)
-	{
-		case 0: // Outgoing
-		{
-			if (createPath(point, point2))
-			{
-				removePath(point2, point);
-				client_print(id, print_chat, "Connect waypoints #%d -> #%d.", point, point2);
-			}
-		}
-		case 1: // Incoming
-		{
-			if (createPath(point2, point))
-			{
-				removePath(point, point2);
-				client_print(id, print_chat, "Connect waypoints #%d -> #%d.", point2, point);
-			}
-		}
-		case 2: // Both ways
-		{
-			createPath(point, point2);
-			createPath(point2, point);
-			
-			client_print(id, print_chat, "Connect waypoints #%d <-> #%d.", point, point2);
-		}
-	}
+	ShowWaypointMenu(id);
 }
 
+// Waypoint range menu
 public ShowRangeMenu(id)
 {
 	static const ranges[] = {0, 8, 16, 32, 48, 64, 80, 96, 128};
 	
 	new menu = menu_create("Waypoint Range", "HandleRangeMenu");
-	new text[32], info[4];
+	new info[4];
 	
 	for (new i = 0; i < sizeof ranges; i++)
 	{
-		formatex(text, charsmax(text), "");
 		num_to_str(ranges[i], info, charsmax(info));
-		menu_additem(menu, text, info);
+		menu_additem(menu, info, info);
 	}
+	
+	menu_setprop(menu, MPROP_NUMBER_COLOR, "\y");
+	menu_display(id, menu);
 }
 
+public HandleRangeMenu(id, menu, item)
+{
+	if (item == MENU_EXIT || g_editor != id)
+	{
+		menu_destroy(menu);
+		return;
+	}
+	
+	new info[4], dummy;
+	menu_item_getinfo(menu, item, dummy, info, charsmax(info), _, _, dummy);
+	menu_destroy(menu);
+	
+	new point = g_currentPoint;
+	g_range = str_to_float(info);
+	
+	if (isPointValid(point))
+	{
+		g_wayRange[point] = g_range;
+		client_print(0, print_chat, "Waypoint #%d range change to %.f.", point, g_range);
+	}
+	
+	ShowWaypointMenu(id);
+}
+
+// Choose auto path distance menu
+public ShowPathDistMenu(id)
+{
+	static distances[] = {100, 120, 140, 160, 190, 220, 250};
+	
+	new menu = menu_create("Auto Path Distance", "HandlePathDistMenu");
+	new info[4];
+	
+	for (new i = 0; i < sizeof distances; i++)
+	{
+		num_to_str(distances[i], info, charsmax(info));
+		menu_additem(menu, info, info);
+	}
+	
+	menu_setprop(menu, MPROP_NUMBER_COLOR, "\y");
+	menu_display(id, menu);
+}
+
+public HandlePathDistMenu(id, menu, item)
+{
+	if (item == MENU_EXIT || g_editor != id)
+	{
+		menu_destroy(menu);
+		return;
+	}
+	
+	new info[4], dummy;
+	menu_item_getinfo(menu, item, dummy, info, charsmax(info), _, _, dummy);
+	menu_destroy(menu);
+	
+	g_autoPathDist = str_to_float(info);
+	ShowWaypointMenu(id);
+}
+
+// Choose auto waypoint distance menu
+public ShowAutoDistMenu(id)
+{
+	static distances[] = {100, 116, 132, 148, 164, 180, 200};
+	
+	new menu = menu_create("Auto Waypoint Distance", "HandleAutoDistMenu");
+	new info[4];
+	
+	for (new i = 0; i < sizeof distances; i++)
+	{
+		num_to_str(distances[i], info, charsmax(info));
+		menu_additem(menu, info, info);
+	}
+	
+	menu_setprop(menu, MPROP_NUMBER_COLOR, "\y");
+	menu_display(id, menu);
+}
+
+public HandleAutoDistMenu(id, menu, item)
+{
+	if (item == MENU_EXIT || g_editor != id)
+	{
+		menu_destroy(menu);
+		return;
+	}
+	
+	new info[4], dummy;
+	menu_item_getinfo(menu, item, dummy, info, charsmax(info), _, _, dummy);
+	menu_destroy(menu);
+	
+	g_autoDist = str_to_float(info);
+	ShowWaypointMenu(id);
+}
+
+// Check whether a point is valid
 stock bool:isPointValid(point)
 {
 	if (point < 0 || point >= MAX_POINTS)
@@ -323,6 +538,7 @@ stock bool:isPointValid(point)
 	return true;
 }
 
+// Create a waypoint
 stock createPoint(Float:origin[3], Float:range=0.0, flags=0)
 {
 	new index = g_wayCount;
@@ -339,51 +555,116 @@ stock createPoint(Float:origin[3], Float:range=0.0, flags=0)
 	return g_wayCount - 1;
 }
 
-stock bool:getPath(point, point2)
+// Remove a waypoint
+stock removePoint(point)
+{
+	g_wayCount--;
+	g_wayPoint[point] = g_wayPoint[g_wayCount];
+	g_wayRange[point] = g_wayRange[g_wayCount];
+	g_wayFlags[point] = g_wayFlags[g_wayCount];
+	g_wayPaths[point] = g_wayPaths[g_wayCount];
+	g_wayPathFlags[point] = g_wayPathFlags[g_wayCount];
+	
+	for (new i = 0; i < g_wayCount; i++)
+	{
+		for (new j = 0; j < MAX_PATHS; j++)
+		{
+			if (g_wayPaths[i][j] == point)
+			{
+				g_wayPaths[i][j] = NULL;
+			}
+			else if (g_wayPaths[i][j] == g_wayCount)
+			{
+				g_wayPaths[i][j] = point;
+			}
+		}
+	}
+}
+
+// Find the closest waypoint
+stock findClosestPoint(Float:origin[3], Float:distance=999999.0)
+{
+	new point = NULL;
+	new Float:minDist = distance;
+	
+	for (new i = 0; i < g_wayCount; i++)
+	{
+		new Float:dist = get_distance_f(origin, g_wayPoint[i]);
+		if (dist < minDist)
+		{
+			point = i;
+			minDist = dist;
+		}
+	}
+	
+	return point;
+}
+
+// Check if point neighbors contain point2 
+stock getPath(point, point2)
 {
 	for (new i = 0; i < MAX_PATHS; i++)
 	{
 		new index = g_wayPaths[point][i];
 		if (index == point2)
-			return true;
+			return i;
 	}
 	
-	return false;
+	return NULL;
 }
 
-stock bool:createPath(point, point2)
+// Create a neighbor for a waypoint
+stock createPath(point, point2)
 {
 	if (point == point2)
-		return false;
+		return NULL;
 	
-	for (new i = 0; i < MAX_PATHS; i++)
-	{
-		if (g_wayPaths[point][i] == point2)
-			return false;
-	}
+	if (getPath(point, point2) != NULL)
+		return NULL;
 	
 	for (new i = 0; i < MAX_PATHS; i++)
 	{
 		if (g_wayPaths[point][i] == NULL)
 		{
 			g_wayPaths[point][i] = point2;
-			return true;
+			g_wayPathFlags[point][i] = 0;
+			return i;
 		}
 	}
 	
-	return false;
+	return NULL;
 }
 
-stock bool:removePath(point, point2)
+// Remove a neighbor for a waypoint
+stock removePath(point, point2)
 {
 	for (new i = 0; i < MAX_PATHS; i++)
 	{
 		if (g_wayPaths[point][i] == point2)
 		{
 			g_wayPaths[point][i] = NULL;
-			return true;
+			g_wayPathFlags[point][i] = 0;
+			return i;
 		}
 	}
 	
-	return false;
+	return NULL;
+}
+
+// Set flags for a path
+stock setPathFlags(point, i, flags)
+{
+	g_wayPathFlags[point][i] = flags;
+}
+
+// Add flags for a path
+stock addPathFlags(point, i, flags)
+{
+	g_wayPathFlags[point][i] |= flags;
+}
+
+// Remove flags for a path
+stock removePathFlags(point, i, flags)
+{
+	g_wayPathFlags[point][i] &= ~flags;
 }
