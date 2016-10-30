@@ -1,7 +1,10 @@
 #include <amxmodx>
 #include <engine>
 #include <fakemeta>
+//#include <hamsandwich>
 #include <xs>
+
+#include <waypoint>
 
 #define NULL -1
 
@@ -9,17 +12,15 @@
 #define ANIM_RUN 4
 #define ANIM_JUMP 6
 
-native Array:wp_aStar(start, goal);
-native wp_getOrigin(point, Float:origin[3]);
-native Float:wp_getRange(point);
-native wp_getType(point);
-native wp_findClosestPoint(Float:origin[3], Float:distance=999999.0);
-native Float:wp_distPointSegment(Float:p[3], Float:sp1[3], Float:sp2[3], Float:output[3]);
-native Float:wp_findClosestPointBetweenPaths(Float:origin[3], path[2], Float:output[3]);
-
-new g_follow;
+#define EV_INT_PREV EV_INT_iuser1
+#define EV_INT_NEXT EV_INT_iuser2
+#define EV_FL_LOCKTIME EV_FL_fuser1
+#define EV_FL_PATHFIND_TIME EV_FL_fuser2
 
 new g_sprBeam4;
+
+new g_start = NULL;
+new g_end = NULL;
 
 public plugin_precache()
 {
@@ -31,9 +32,11 @@ public plugin_init()
 	register_plugin("NPC", "0.1", "penguinux");
 	
 	register_clcmd("create_npc", "CmdCreateNpc");
-	register_clcmd("create_obs", "CmdCreateObs");
-	register_clcmd("say /follow", "CmdNpcFollow");
-	register_clcmd("intersect", "CmdIntersect");
+	
+	register_clcmd("wp_start", "CmdStart");
+	register_clcmd("wp_end", "CmdEnd");
+	register_clcmd("wp_astar", "CmdAStar");
+	register_clcmd("wp_test", "CmdTest");
 	
 	register_think("npc_test", "ThinkNpc");
 	
@@ -63,7 +66,8 @@ public CmdCreateNpc(id)
 		entity_set_int(ent, EV_INT_solid, SOLID_SLIDEBOX);
 		entity_set_int(ent, EV_INT_movetype, MOVETYPE_STEP);
 		
-		entity_set_int(ent, EV_INT_iuser1, NULL);
+		entity_set_int(ent, EV_INT_PREV, NULL);
+		entity_set_int(ent, EV_INT_NEXT, NULL);
 		
 		// animating
 		entity_set_int(ent, EV_INT_sequence, ANIM_IDLE);
@@ -74,185 +78,171 @@ public CmdCreateNpc(id)
 	}
 }
 
-public CmdCreateObs(id)
+public CmdStart(id)
 {
 	new Float:origin[3];
 	entity_get_vector(id, EV_VEC_origin, origin);
 	
-	new ent = create_entity("info_target");
-	if (is_valid_ent(ent))
-	{
-		entity_set_model(ent, "models/player/sas/sas.mdl");
-		entity_set_size(ent, Float:{-16.0, -16.0, -36.0}, Float:{16.0, 16.0, 36.0});
-		entity_set_origin(ent, origin);
-		
-		entity_set_float(ent, EV_FL_takedamage, DAMAGE_YES);
-		entity_set_float(ent, EV_FL_health, 100.0);
-		
-		entity_set_int(ent, EV_INT_gamestate, 1);
-		entity_set_int(ent, EV_INT_solid, SOLID_SLIDEBOX);
-		entity_set_int(ent, EV_INT_movetype, MOVETYPE_STEP);
-		
-		entity_set_int(ent, EV_INT_sequence, ANIM_IDLE);
-		entity_set_float(ent, EV_FL_animtime, get_gametime());
-		entity_set_float(ent, EV_FL_framerate, 1.0);
-	}
-	
-	origin[2]+=80.0;
-	entity_set_origin(id, origin);
+	g_start = wp_GetCurrentPoint(origin);
+	return PLUGIN_HANDLED;
 }
 
-public CmdNpcFollow(id)
+public CmdEnd(id)
 {
-	if (g_follow)
-	{
-		g_follow = 0;
-		client_print(id, print_chat, "NPC stop following.");
-	}
-	else
-	{
-		g_follow = id;
-		client_print(id, print_chat, "NPC will follow %n.", id);
-	}
+	new Float:origin[3];
+	entity_get_vector(id, EV_VEC_origin, origin);
+	
+	g_end = wp_GetCurrentPoint(origin);
+	return PLUGIN_HANDLED;
 }
 
-public CmdIntersect(id)
+public CmdAStar(id)
 {
-	new Float:start[3], Float:end[3];
-	pev(id, pev_origin, start);
-	
-	pev(id, pev_view_ofs, end);
-	xs_vec_add(start, end, start);
-	
-	velocity_by_aim(id, 500, end);
-	xs_vec_add(end, start, end);
-	
-	new ent = -1;
-	while ((ent = find_ent_in_sphere(ent, start, 500.0)) != 0)
+	if (wp_IsValid(g_start) && wp_IsValid(g_end))
 	{
-		if (!is_valid_ent(ent))
-			continue;
-		
-		if (entity_get_int(ent, EV_INT_movetype) == MOVETYPE_PUSHSTEP || entity_get_int(ent, EV_INT_solid) == SOLID_BSP)
-			continue;
-		
-		if (entity_get_float(ent, EV_FL_takedamage) == DAMAGE_NO)
-			continue;
-		
-		if (id == ent)
-			continue;
-		
-		static Float:origin[3], Float:mins[3], Float:maxs[3];
-		entity_get_vector(ent, EV_VEC_origin, origin);
-		entity_get_vector(ent, EV_VEC_mins, mins);
-		entity_get_vector(ent, EV_VEC_maxs, maxs);
-		
-		xs_vec_add(origin, mins, mins);
-		xs_vec_add(origin, maxs, maxs);
-		
-		static Float:intersection[3];
-		if (intersectSegmentBox2(start, end, mins, maxs, intersection))
+		new Array:path = wp_AStar(g_start, g_end);
+		if (path != Invalid_Array)
 		{
-			drawLine(id, 
-				intersection[0], intersection[1], intersection[2]-5.0, 
-				intersection[0], intersection[1], intersection[2]+5.0, 
-				g_sprBeam4, .life=100, .width=10, .color={255, 0, 0}, .alpha=255);
+			new Float:pos1[3], Float:pos2[3];
+			new size = ArraySize(path);
 			
-			client_print(id, print_chat, "intersect");
-			break;
+			for (new i = 0; i < (size-1); i++)
+			{
+				wp_GetOrigin(ArrayGetCell(path, i), pos1);
+				wp_GetOrigin(ArrayGetCell(path, i+1), pos2);
+				
+				drawLine2(0, pos1, pos2, g_sprBeam4, .life=100, .width=10, .color={0, 100, 255}, .alpha=255);
+			}
 		}
 		else
 		{
-			client_print(id, print_chat, "no intersect");
+			client_print(id, print_chat, "No path found.");
 		}
+	}
+	else
+	{
+		client_print(id, print_chat, "You need set start point and end point.");
+	}
+	
+	return PLUGIN_HANDLED;
+}
+
+public CmdTest(id)
+{
+	new Float:origin[3];
+	entity_get_vector(id, EV_VEC_origin, origin);
+	
+	new segment[2], Float:pos[3];
+	getClosestPointBetweenPaths(origin, segment, pos);
+		
+	if (segment[0] != NULL && segment[1] != NULL)
+	{
+		new Float:pos1[3], Float:pos2[3];
+		wp_GetOrigin(segment[0], pos1);
+		wp_GetOrigin(segment[1], pos2);
+		
+		drawLine2(id, pos1, pos2, g_sprBeam4, .life=100, .width=20, .color={0, 100, 200}, .alpha=255);
+		client_print(id, print_chat, "%d %d", segment[0], segment[1]);
+	}
+}
+
+public OnAddToFullPack_Post(es, e, ent, host, flags, player, pset)
+{
+	if (get_es(es, ES_MoveType) == MOVETYPE_STEP)
+	{
+		set_es(es, ES_MoveType, MOVETYPE_PUSHSTEP);
 	}
 }
 
 public ThinkNpc(npc)
 {
-	new Float:velocity[3];
-	if (g_follow)
+	new Float:gameTime = get_gametime();
+	
+	new Float:origin[3];
+	entity_get_vector(npc, EV_VEC_origin, origin);
+	
+	new enemy = entity_get_edict(npc, EV_ENT_enemy);
+	new oldEnemy = enemy;
+	
+	if (!is_user_alive(enemy))
 	{
-		new bool:jump;
+		enemy = findClosestPlayer(origin);
+	}
+	else if (gameTime >= entity_get_float(npc, EV_FL_LOCKTIME) + 15.0)
+	{
+		new player = findClosestPlayer(origin, 300.0);
+		if (is_user_alive(player))
+			enemy = player;
+	}
+	
+	if (is_user_alive(enemy))
+	{
+		new Float:origin2[3], Float:target[3];
+		entity_get_vector(enemy, EV_VEC_origin, origin2);
 		
-		new Float:target[3];
-		new Float:origin[3], Float:origin2[3];
-		entity_get_vector(npc, EV_VEC_origin, origin);
-		entity_get_vector(g_follow, EV_VEC_origin, origin2);
-		
-		if (get_gametime() >= entity_get_float(npc, EV_FL_ltime) + 0.2)
+		if (gameTime >= entity_get_float(npc, EV_FL_PATHFIND_TIME) + 0.1)
 		{
-			new start = entity_get_int(npc, EV_INT_iuser1);
-			if (start == NULL)
-				start = wp_findClosestPoint(origin);
-			else
+			new prev = entity_get_int(npc, EV_INT_PREV);
+			new next = entity_get_int(npc, EV_INT_NEXT);
+			new goal = wp_GetCurrentPoint(origin2);
+			
+			if (!wp_IsValid(prev) || !wp_IsValid(next))
 			{
-				new Float:origin3[3];
-				wp_getOrigin(start, origin3);
+				new line[2], Float:pos[3];
+				getClosestPointBetweenPaths(origin, line, pos);
 				
-				if (get_distance_f(origin, origin3) > 350)
-					start = wp_findClosestPoint(origin);
-			}
-			
-			new goal = wp_findClosestPoint(origin2);
-			
-			new Array:path = wp_aStar(start, goal);
-			if (path != Invalid_Array)
-			{
-				new size = ArraySize(path);
-				if (size <= 2)
+				if (line[0] != NULL && line[1] != NULL && goal != NULL)
 				{
-					if (size == 2)
+					new Array:path = wp_AStar(line[0], goal);
+					if (path != Invalid_Array)
 					{
-						new p = ArrayGetCell(path, 1);
-						if (wp_getType(p) == 1)
+						new size = ArraySize(path);
+						if (size >= 2)
 						{
-							jump = true;
+							new current = ArrayGetCell(path, 1);
+							if (current != line[1])
+							{
+								ArrayInsertCellBefore(path, 0, line[1]);
+								size = ArraySize(path);
+							}
+						}
+						
+						if (size <= 2)
+						{
+							target = origin2;
+							prev = ArrayGetCell(path, 0);
+							next = (size == 1) ? prev : ArrayGetCell(path, 1);
+						}
+						else
+						{
+							prev = ArrayGetCell(path, 0);
+							next = ArrayGetCell(path, 1);
+							
+							wp_GetOrigin(next, pos);
+							if (get_distance_f(origin, pos) <= wp_GetRange(next))
+							{
+								prev = next;
+								next = ArrayGetCell(path, 2);
+							}
 						}
 					}
-					
-					target = origin2;
-					entity_set_int(npc, EV_INT_iuser1, NULL);
 				}
-				else
-				{
-					new p = ArrayGetCell(path, 1);
-
-					new Float:origin3[3];
-					wp_getOrigin(p, origin3);
-					
-					if (wp_getType(p) == 1)
-					{
-						jump = true;
-					}
-					
-					if (get_distance_f(origin, origin3) <= wp_getRange(p))
-					{
-						entity_set_int(npc, EV_INT_iuser1, p);
-					}
-					
-					target = origin3;
-				}
-				
-				ArrayDestroy(path);
 			}
 			else
 			{
-				target = Float:{999999.0, 0.0, 0.0};
+				
 			}
 			
 			entity_set_vector(npc, EV_VEC_oldorigin, target);
-			entity_set_float(npc, EV_FL_ltime, get_gametime());
+			entity_set_float(npc, EV_FL_PATHFIND_TIME, gameTime);
 		}
 		
 		entity_get_vector(npc, EV_VEC_oldorigin, target);
 		
-		if (target[0] != 999999.0)
+		if (target[0] != -9999999.0)
 		{
 			new Float:steering[3];
 			xs_vec_add(steering, seek(npc, target, 200.0), steering);
-			xs_vec_add(steering, collisionAvoidance(npc, 200.0, 100.0), steering);
-			//xs_vec_add(steering, separation(npc, 100.0, 50.0), steering);
 			
 			new Float:avelocity[3];
 			entity_get_vector(npc, EV_VEC_avelocity, avelocity);
@@ -262,16 +252,11 @@ public ThinkNpc(npc)
 			xs_vec_add(avelocity, steering, avelocity);
 			truncate(avelocity, 200.0);
 			
+			new Float:velocity[3];
 			entity_get_vector(npc, EV_VEC_velocity, velocity);
 			
 			velocity[0] = avelocity[0];
 			velocity[1] = avelocity[1];
-			
-			if (jump && (entity_get_int(npc, EV_INT_flags) & FL_ONGROUND))
-			{
-				velocity[2] += 300.0;
-				entity_set_int(npc, EV_INT_sequence, ANIM_JUMP);
-			}
 			
 			entity_set_vector(npc, EV_VEC_velocity, velocity);
 			entity_set_vector(npc, EV_VEC_avelocity, velocity);
@@ -283,66 +268,103 @@ public ThinkNpc(npc)
 			
 			engfunc(EngFunc_MoveToOrigin, npc, target, 0.5, MOVE_STRAFE);
 		}
-	}
-	
-	if (entity_get_int(npc, EV_INT_sequence) == ANIM_JUMP && !(entity_get_int(npc, EV_INT_flags) & FL_ONGROUND))
-	{
-		entity_set_int(npc, EV_INT_sequence, ANIM_JUMP)
+		
+		if (enemy != oldEnemy)
+		{
+			entity_set_edict(npc, EV_ENT_enemy, enemy);
+			entity_set_float(npc, EV_FL_LOCKTIME, gameTime);
+		}
 	}
 	else
 	{
-		if (xs_vec_len(velocity) > 1)
-			entity_set_int(npc, EV_INT_sequence, ANIM_RUN);
-		else
-			entity_set_int(npc, EV_INT_sequence, ANIM_IDLE);
+		entity_set_edict(npc, EV_ENT_enemy, 0);
 	}
 	
-	entity_set_float(npc, EV_FL_nextthink, get_gametime() + 0.05);
+	new Float:velocity[3];
+	entity_get_vector(npc, EV_VEC_velocity, velocity);
+	
+	if (xs_vec_len(velocity) > 10)
+		entity_set_int(npc, EV_INT_sequence, ANIM_RUN);
+	else
+		entity_set_int(npc, EV_INT_sequence, ANIM_IDLE);
+	
+	entity_set_float(npc, EV_FL_nextthink, gameTime + 0.05);
 }
 
-public OnAddToFullPack_Post(es, e, ent, host, flags, player, pset)
+stock Float:getClosestPointBetweenPaths(Float:origin[3], path[2], Float:output[3], Float:distance=9999999.0)
 {
-	if (get_es(es, ES_MoveType) == MOVETYPE_STEP)
+	new a, b, i;
+	new count = wp_GetCount();
+	new found[MAX_POINTS >> 5];
+	new Float:dist, Float:minDist = distance;
+	new Float:pos[3], Float:pos1[3], Float:pos2[3];
+	
+	path[0] = NULL;
+	path[1] = NULL;
+	
+	for (a = 0; a < count; a++)
 	{
-		set_es(es, ES_MoveType, MOVETYPE_PUSHSTEP);
+		for (i = 0; i < MAX_PATHS; i++)
+		{
+			b = wp_GetNeighbor(a, i);
+			if (b == NULL)
+				continue;
+			
+			if (getArrayBits(found, b))
+				continue;
+			
+			wp_GetOrigin(a, pos1);
+			wp_GetOrigin(b, pos2);
+			
+			dist = distPointSegment(origin, pos1, pos2, pos);
+			if (dist < minDist && isReachable(origin, pos, IGNORE_MONSTERS))
+			{
+				path[0] = a;
+				path[1] = b;
+				output = pos;
+				minDist = dist;
+			}
+		}
+		
+		setArrayBits(found, a);
 	}
+	
+	return minDist;
 }
 
-public client_disconnected(id)
+stock Float:distPointPath(Float:origin[3], point1, point2, Float:output[3])
 {
-	if (g_follow == id)
-		g_follow = 0;
+	new Float:pos1[3], Float:pos2[3];
+	wp_GetOrigin(point1, pos1);
+	wp_GetOrigin(point2, pos2);
+	
+	return distPointSegment(origin, pos1, pos2, output);
 }
 
-stock findClosestLine(Float:origin[3], Array:path, indexes[2], Float:output[3])
+stock findClosestPlayer(Float:origin[3], Float:distance=9999999.0)
 {
-	new size = ArraySize(path);
-	if (size < 2)
-		return false;
+	new player = 0;
+	new Float:dist, Float:minDist = distance;
+	new Float:origin2[3];
 	
-	new Float:minDist = 999999.0;
-	
-	for (new i = 0; i < (size-1); i++)
+	new ent = -1;
+	while ((ent = find_ent_in_sphere(ent, origin, distance)) != 0)
 	{
-		new p1 = ArrayGetCell(path, i);
-		new p2 = ArrayGetCell(path, i+1);
+		// Not player
+		if (!is_user_alive(ent))
+			continue;
 		
-		new Float:origin1[3], Float:origin2[3];
-		wp_getOrigin(p1, origin1);
-		wp_getOrigin(p2, origin2);
+		entity_get_vector(ent, EV_VEC_origin, origin2);
 		
-		new Float:origin3[3];
-		new Float:dist = wp_distPointSegment(origin, origin1, origin2, origin3);
+		dist = get_distance_f(origin, origin2);
 		if (dist < minDist)
 		{
-			indexes[0] = i;
-			indexes[1] = i+1;
-			output = origin3;
+			player = ent;
 			minDist = dist;
 		}
 	}
 	
-	return true;
+	return player;
 }
 
 stock Float:seek(ent, Float:target[3], Float:maxspeed)
@@ -364,49 +386,6 @@ stock Float:seek(ent, Float:target[3], Float:maxspeed)
 	return force;
 }
 
-stock Float:separation(npc, Float:radius, Float:force)
-{
-	new Float:v[3];
-	new count = 0;
-	
-	new Float:origin[3];
-	entity_get_vector(npc, EV_VEC_origin, origin);
-	
-	new ent = -1;
-	while ((ent = find_ent_in_sphere(ent, origin, radius)) != 0)
-	{
-		if (!is_valid_ent(ent))
-			continue;
-		
-		if (entity_get_int(ent, EV_INT_movetype) == MOVETYPE_PUSHSTEP || entity_get_int(ent, EV_INT_solid) == SOLID_BSP)
-			continue;
-		
-		if (entity_get_float(ent, EV_FL_takedamage) == DAMAGE_NO)
-			continue;
-		
-		if (npc == ent)
-			continue;
-		
-		new Float:origin2[3];
-		entity_get_vector(ent, EV_VEC_origin, origin2);
-		
-		v[0] += origin2[0] - origin[0];
-		v[1] += origin2[1] - origin[1];
-		v[2] += origin2[2] - origin[2];
-		count++;
-	}
-	
-	if (count == 0)
-		return v;
-	
-	xs_vec_div_scalar(v, float(count), v);
-	xs_vec_mul_scalar(v, -1.0, v);
-	xs_vec_normalize(v, v);
-	xs_vec_mul_scalar(v, force, v);
-	
-	return v;
-}
-
 stock truncate(Float:vector[3], Float:max)
 {
 	new Float:i;
@@ -416,198 +395,46 @@ stock truncate(Float:vector[3], Float:max)
 	xs_vec_mul_scalar(vector, i, vector)
 }
 
-stock Float:collisionAvoidance(npc, Float:maxspeed, Float:force)
+stock bool:isReachable(Float:start[3], Float:end[3], noMonsters=IGNORE_MONSTERS, skipEnt=0)
 {
-	new Float:position[3], Float:velocity[3], Float:angles[3];
-	entity_get_vector(npc, EV_VEC_origin, position);
-	entity_get_vector(npc, EV_VEC_velocity, velocity);
-	entity_get_vector(npc, EV_VEC_angles, angles);
-	
-	new Float:ahead[3];
-	angle_vector(angles, ANGLEVECTOR_FORWARD, ahead);
-	xs_vec_mul_scalar(ahead, floatmax(vector_length(velocity), 50.0), ahead);
-	xs_vec_add(position, ahead, ahead);
-	
-	drawLine2(0, position, ahead, g_sprBeam4, .life=1, .width=10, .color={255, 0, 0}, .alpha=255);
-	
-	new obstacle = NULL;
-	new Float:minDist = 999999.0;
-	new Float:radius = get_distance_f(position, ahead) + 100.0;
-	new Float:intersect[3];
-	
-	new ent = -1;
-	while ((ent = find_ent_in_sphere(ent, position, radius)) != 0)
-	{
-		if (!is_valid_ent(ent))
-			continue;
-		
-		if (entity_get_int(ent, EV_INT_movetype) == MOVETYPE_PUSHSTEP || entity_get_int(ent, EV_INT_solid) == SOLID_BSP)
-			continue;
-		
-		if (entity_get_float(ent, EV_FL_takedamage) == DAMAGE_NO)
-			continue;
-		
-		if (npc == ent)
-			continue;
-		
-		static Float:origin[3], Float:mins[3], Float:maxs[3];
-		entity_get_vector(ent, EV_VEC_origin, origin);
-		entity_get_vector(ent, EV_VEC_mins, mins);
-		entity_get_vector(ent, EV_VEC_maxs, maxs);
-		
-		xs_vec_add(origin, mins, mins);
-		xs_vec_add(origin, maxs, maxs);
-		
-		static Float:intersect2[3];
-		if (intersectSegmentBox2(position, ahead, mins, maxs, intersect2))
-		{
-			new Float:dist = get_distance_f(position, origin);
-			if (dist < minDist)
-			{
-				obstacle = ent;
-				minDist = dist;
-				intersect = intersect2;
-			}
-		}
-	}
-	
-	new Float:avoidance[3];
-	if (obstacle != NULL)
-	{
-		new Float:center[3];
-		entity_get_vector(obstacle, EV_VEC_origin, center);
-		
-		//distPointSegment(center, position, ahead, intersect);
-		
-		xs_vec_sub(intersect, center, avoidance);
-		xs_vec_normalize(avoidance, avoidance);
-		xs_vec_mul_scalar(avoidance, force, avoidance);
-		
-		//client_print(0, print_chat, "obstacle = %d", obstacle);
-	}
-	
-	return avoidance;
-}
-
-stock bool:intersectSegmentBox(Float:begin[3], Float:end[3], Float:mins[3], Float:maxs[3], Float:output[3])
-{
-	new Float:beginToEnd[3], Float:beginToMin[3], Float:beginToMax[3];
-	xs_vec_sub(end, begin, beginToEnd);
-	xs_vec_sub(mins, begin, beginToMin);
-	xs_vec_sub(maxs, begin, beginToMax);
-	
-	new Float:tNear = -99999999.0;
-	new Float:tFar = 99999999.0;
-	
-	for (new i = 0; i < 3; i++)
-	{
-		if (beginToEnd[i] == 0.0)
-		{
-			if (beginToMin[i] > 0.0 || beginToMax[i] < 0.0)
-				return false;
-		}
-		else
-		{
-			new Float:t1 = beginToMin[i] / beginToEnd[i];
-			new Float:t2 = beginToMax[i] / beginToEnd[i];
-			new Float:tMin = floatmin(t1, t2);
-			new Float:tMax = floatmin(t1, t2);
+	engfunc(EngFunc_TraceLine, start, end, noMonsters, skipEnt, 0);
 			
-			if (tMin > tNear) tNear = tMin;
-			if (tMax < tFar) tFar = tMax;
-			if (tNear > tFar || tFar < 0.0)
-				return false;
-		}
-	}
+	new Float:fraction;
+	get_tr2(0, TR_flFraction, fraction);
 	
-	if (tNear >= 0.0 && tNear <= 1.0)
-	{
-		xs_vec_mul_scalar(output, tNear, output);
-		xs_vec_add(begin, output, output);
-		return true;
-	}
+	if (fraction < 1.0)
+		return false;
 	
-	if (tFar >= 0.0 && tFar <= 1.0)
-	{
-		xs_vec_mul_scalar(output, tFar, output);
-		xs_vec_add(begin, output, output);
-		return true;
-	}
-	
-	return false;
-}
-
-stock bool:intersectSegmentBox2(Float:begin[3], Float:end[3], Float:mins[3], Float:maxs[3], Float:output[3])
-{
-	new Float:st, Float:et, Float:fst = 0.0, Float:fet = 1.0;
-	new Float:bmin, Float:bmax;
-	new Float:si, Float:ei;
-	
-	for (new i = 0; i < 3; i++)
-	{
-		bmin = mins[i];
-		bmax = maxs[i];
-		si = begin[i];
-		ei = end[i];
-		
-		if (si < ei)
-		{
-			if (si > bmax || ei < bmin)
-				return false;
-			
-			new Float:di = ei - si;
-			st = (si < bmin) ? (bmin - si) / di : 0.0;
-			et = (ei > bmax) ? (bmax - si) / di : 1.0;
-		}
-		else
-		{
-			if (ei > bmax || si < bmin)
-				return false;
-			
-			new Float:di = ei - si;
-			st = (si > bmax) ? (bmax - si) / di : 0.0;
-			et = (ei < bmin) ? (bmin - si) / di : 1.0;
-		}
-		
-		if (st > fst) fst = st;
-		if (et < fet) fet = et;
-		if (fet < fst)
-			return false;
-	}
-	
-	xs_vec_sub(end, begin, output);
-	xs_vec_mul_scalar(output, fst, output);
-	xs_vec_add(begin, output, output);
 	return true;
 }
 
-stock Float:distPointSegment(Float:p[3], Float:sp1[3], Float:sp2[3], Float:output[3])
+stock Float:distPointSegment(Float:origin[3], Float:begin[3], Float:end[3], Float:output[3])
 {
 	new Float:v[3], Float:w[3];
-	xs_vec_sub(sp2, sp1, v);
-	xs_vec_sub(p, sp1, w);
+	xs_vec_sub(end, begin, v);
+	xs_vec_sub(origin, begin, w);
 	
 	new Float:c1 = xs_vec_dot(w, v);
 	if (c1 <= 0)
 	{
-		output = sp1;
-		return get_distance_f(p, sp1);
+		output = begin;
+		return get_distance_f(origin, begin);
 	}
 	
 	new Float:c2 = xs_vec_dot(v, v);
 	if (c2 <= c1)
 	{
-		output = sp2;
-		return get_distance_f(p, sp2);
+		output = end;
+		return get_distance_f(origin, end);
 	}
 	
 	new Float:b = c1 / c2;
 	new Float:pB[3];
 	xs_vec_mul_scalar(v, b, pB);
-	xs_vec_add(sp1, pB, pB);
+	xs_vec_add(begin, pB, pB);
 	
 	output = pB;
-	return get_distance_f(p, pB);
+	return get_distance_f(origin, pB);
 }
 
 stock drawLine(id, Float:x1, Float:y1, Float:z1, Float:x2, Float:y2, Float:z2, 

@@ -2,36 +2,19 @@
 #include <fakemeta>
 #include <xs>
 
+#include <waypoint_const>
+
 //#define DEBUG
 
 #define NULL -1
 
-#define MAX_POINTS 1280 // Max waypoints (must be divisible by 32)
-#define MAX_PATHS 10 // Max paths in a waypoint
 #define MAX_POINTS_SHOWN 50 // Max waypoints that will be shown
 
 #define AUTO_DIST_DEFAULT 124.0 // Default value of auto waypoint distance
 #define AUTOPATH_DIST_DEFAULT 190.0 // Default value of auto path distance
 #define WAYPOINT_RANGE_DEFAULT 32.0 // Default value of waypoint range
 #define WAYPOINT_RANGE_SIDES 6 // Number of polygon sides for displaying waypoint range
-
-// Some tricks
-#define getArrayBits(%1,%2) (%1[%2 >> 5] & (1 << (%2 & 31)))
-#define setArrayBits(%1,%2) (%1[%2 >> 5] |= (1 << (%2 & 31)))
-#define unsetArrayBits(%1,%2) (%1[%2 >> 5] &= ~(1 << (%2 & 31)))
-
-// Waypoint flags
-enum (<<= 1)
-{
-    WAYPOINT_JUMP = 1,
-	WAYPOINT_DUCK
-};
-
-// Waypoint path flags
-enum (<<= 1)
-{
-	WAYPATH_JUMP = 1,
-};
+#define HEURISTIC 1
 
 // Waypoint flags name
 new const WAYPOINT_FLAGS[][] = {"Jump", "Duck"};
@@ -55,8 +38,6 @@ new g_menuPage = 0;
 new g_currentPoint = NULL;
 new g_aimPoint = NULL;
 
-new g_start, g_goal;
-
 new g_sprBeam1, g_sprBeam4, g_sprArrow;
 
 public plugin_precache()
@@ -74,17 +55,9 @@ public plugin_init()
 	
 	register_forward(FM_PlayerPreThink, "OnPlayerPreThink");
 	
-	register_clcmd("wp_set_start", "CmdSetStart");
-	register_clcmd("wp_set_goal", "CmdSetGoal");
-	register_clcmd("wp_astar", "CmdAStar");
-	
 	set_task(0.5, "ShowWaypoints", 0, .flags="b");
 	
 	loadWaypoints();
-	
-	#if defined DEBUG
-	testBinaryHeap();
-	#endif
 }
 
 public CmdWaypointMenu(id)
@@ -97,48 +70,6 @@ public CmdWaypointMenu(id)
 	
 	g_editor = id;
 	ShowWaypointMenu(id);
-	return PLUGIN_HANDLED;
-}
-
-public CmdSetStart(id)
-{
-	g_start = g_currentPoint;
-	client_print(0, print_chat, "Set start point to #%d", g_start);
-	
-	return PLUGIN_HANDLED;
-}
-
-public CmdSetGoal(id)
-{
-	g_goal = g_currentPoint;
-	client_print(0, print_chat, "Set goal to #%d", g_goal);
-	
-	return PLUGIN_HANDLED;
-}
-
-public CmdAStar(id)
-{
-	new Array:path = aStar(g_start, g_goal);
-	if (path != Invalid_Array)
-	{
-		new size = ArraySize(path);
-		new point, point2;
-		
-		for (new i = 0; i < size-1; i++)
-		{
-			point = ArrayGetCell(path, i);
-			point2 = ArrayGetCell(path, i+1);
-			
-			drawLine2(id, g_wayPoint[point], g_wayPoint[point2], g_sprBeam4, .life=100, .width=10, .color={0, 200, 200}, .alpha=255);
-		}
-		
-		client_print(0, print_chat, "Path found from #%d to #%d. (%d points)", g_start, g_goal, size);
-	}
-	else
-	{
-		client_print(0, print_chat, "No path found.");
-	}
-	
 	return PLUGIN_HANDLED;
 }
 
@@ -336,7 +267,7 @@ public ShowWaypoints()
 	}
 	
 	#if defined DEBUG
-	if (maxPointsShown)
+	if (maxPointsShown > 0)
 		client_print(g_editor, print_console, "--------------------");
 	#endif
 }
@@ -381,6 +312,9 @@ public HandleWaypointMenu(id, menu, item)
 {
 	if (item == MENU_EXIT || g_editor != id)
 	{
+		if (g_editor == id)
+			g_editor = 0;
+		
 		menu_destroy(menu);
 		return;
 	}
@@ -744,12 +678,20 @@ public plugin_natives()
 	register_native("wp_GetOrigin", "native_GetOrigin");
 	register_native("wp_GetRange", "native_GetRange");
 	register_native("wp_GetFlags", "native_GetFlags");
+	register_native("wp_GetNeighbor", "native_GetNeighbor");
+	register_native("wp_IsNeighborSet", "native_IsNeighborSet");
+	register_native("wp_GetPathFlags", "native_GetPathFlags");
+	register_native("wp_GetCount", "native_GetCount");
+	register_native("wp_IsValid", "native_IsValid");
+	register_native("wp_FindClosestPoint", "native_FindClosestPoint");
+	register_native("wp_GetCurrentPoint", "native_GetCurrentPoint");
+	register_native("wp_AStar", "native_AStar");
 }
 
 public native_GetOrigin()
 {
 	new point = get_param(1);
-	if (isPointValid(point))
+	if (!isPointValid(point))
 	{
 		log_error(AMX_ERR_NATIVE, "Invalid waypoint.");
 		return;
@@ -761,7 +703,7 @@ public native_GetOrigin()
 public Float:native_GetRange()
 {
 	new point = get_param(1);
-	if (isPointValid(point))
+	if (!isPointValid(point))
 	{
 		log_error(AMX_ERR_NATIVE, "Invalid waypoint.");
 		return 0.0;
@@ -773,7 +715,7 @@ public Float:native_GetRange()
 public native_GetFlags()
 {
 	new point = get_param(1);
-	if (isPointValid(point))
+	if (!isPointValid(point))
 	{
 		log_error(AMX_ERR_NATIVE, "Invalid waypoint.");
 		return 0;
@@ -782,13 +724,108 @@ public native_GetFlags()
 	return g_wayFlags[point];
 }
 
+public native_GetNeighbor()
+{
+	new point = get_param(1);
+	if (!isPointValid(point))
+	{
+		log_error(AMX_ERR_NATIVE, "Invalid waypoint.");
+		return NULL;
+	}
+	
+	new i = get_param(2);
+	if (i < 0 || i >= MAX_PATHS)
+	{
+		log_error(AMX_ERR_NATIVE, "Invalid path index.");
+		return NULL;
+	}
+	
+	return g_wayPaths[point][i];
+}
+
+public native_IsNeighborSet()
+{
+	new point = get_param(1);
+	new point2 = get_param(2);
+	
+	if (!isPointValid(point) || !isPointValid(point2))
+	{
+		log_error(AMX_ERR_NATIVE, "Invalid waypoint.");
+		return NULL;
+	}
+	
+	return getPath(point, point2);
+}
+
+public native_GetPathFlags()
+{
+	new point = get_param(1);
+	if (!isPointValid(point))
+	{
+		log_error(AMX_ERR_NATIVE, "Invalid waypoint.");
+		return 0;
+	}
+	
+	new point2 = get_param(2);
+	if (!isPointValid(point2))
+	{
+		log_error(AMX_ERR_NATIVE, "Invalid waypoint.");
+		return 0;
+	}
+	
+	return getPathFlags(point, point2);
+}
+
+public native_GetCount()
+{
+	return g_wayCount;
+}
+
+public native_FindClosestPoint()
+{
+	new Float:origin[3];
+	get_array_f(1, origin, 3);
+	
+	new Float:distance = get_param_f(2);
+	return findClosestPoint(origin, distance);
+}
+
+public native_GetCurrentPoint()
+{
+	new Float:origin[3];
+	get_array_f(1, origin, 3);
+	
+	new Float:distance = get_param_f(2);
+	return getCurrentPoint(origin, distance);
+}
+
+public Array:native_AStar()
+{
+	new start = get_param(1);
+	new goal = get_param(2);
+	
+	if (!isPointValid(start) || !isPointValid(goal))
+	{
+		log_error(AMX_ERR_NATIVE, "Invalid waypoint.");
+		return Invalid_Array;
+	}
+	
+	return aStar(start, goal);
+}
+
+public bool:native_IsValid()
+{
+	new point = get_param(1);
+	return isPointValid(point);
+}
+
 stock Array:aStar(start, goal)
 {
 	new closedList[MAX_POINTS >> 5];
 	new openListBits[MAX_POINTS >> 5];
 	
 	static openList[MAX_POINTS];
-	static size; size = 0;
+	static sizeOpen; sizeOpen = 0;
 	
 	static cameFrom[MAX_POINTS];
 	static Float:gCost[MAX_POINTS], Float:fCost[MAX_POINTS];
@@ -805,17 +842,29 @@ stock Array:aStar(start, goal)
 	fCost[start] = heuristicCost(start, goal);
 	
 	// Add start to open list
-	heapInsert(start, openList, size, fCost);
+	openList[sizeOpen++] = start;
 	setArrayBits(openListBits, start);
 	
-	new current, neighbor;
-	new Float:tentativeCost;
+	new i, j;
+	new index, current, neighbor;
+	new Float:cost;
 	
-	while (size)
+	while (sizeOpen > 0)
 	{
-		current = heapGetMin(openList, size);
+		cost = 9999999.0;
 		
-		// We have found the path
+		for (i = 0; i < sizeOpen; i++)
+		{
+			index = openList[i];
+			if (fCost[index] < cost)
+			{
+				j = i;
+				current = index;
+				cost = fCost[index];
+			}
+		}
+		
+		// We found the path
 		if (current == goal)
 		{
 			new Array:path = ArrayCreate(1);
@@ -830,15 +879,15 @@ stock Array:aStar(start, goal)
 			return path;
 		}
 		
-		// Remove from open list
-		heapRemoveMin(openList, size, fCost);
+		// Remove current from open list
+		openList[j] = openList[--sizeOpen];
 		unsetArrayBits(openListBits, current);
 		
 		// Add to closed list
 		setArrayBits(closedList, current);
 		
 		// Get the neighbors of current
-		for (new i = 0; i < MAX_PATHS; i++)
+		for (i = 0; i < MAX_PATHS; i++)
 		{
 			neighbor = g_wayPaths[current][i];
 			if (neighbor == NULL)
@@ -850,137 +899,32 @@ stock Array:aStar(start, goal)
 			if (!isReachable(g_wayPoint[current], g_wayPoint[neighbor], IGNORE_MONSTERS))
 				continue;
 			
-			tentativeCost = gCost[current] + get_distance_f(g_wayPoint[current], g_wayPoint[neighbor]);
+			cost = gCost[current] + get_distance_f(g_wayPoint[current], g_wayPoint[neighbor]);
 			
 			if (!getArrayBits(openListBits, neighbor))
 			{
-				heapInsert(neighbor, openList, size, fCost);
+				openList[sizeOpen++] = neighbor;
 				setArrayBits(openListBits, neighbor);
 			}
-			else if (tentativeCost >= gCost[neighbor])
+			else if (cost >= gCost[neighbor])
 				continue;
 			
 			cameFrom[neighbor] = current;
-			gCost[neighbor] = tentativeCost;
-			fCost[neighbor] = tentativeCost + heuristicCost(neighbor, goal);
+			gCost[neighbor] = cost;
+			fCost[neighbor] = gCost[neighbor] + heuristicCost(neighbor, goal);
 		}
 	}
 	
 	return Invalid_Array;
 }
 
-stock Float:heuristicCost(start, goal)
+stock Float:heuristicCost(start, end)
 {
-	return get_distance_f(g_wayPoint[start], g_wayPoint[goal]);
-}
-
-// Binary heap
-stock testBinaryHeap()
-{
-	new heap[10], size = 0;
-	new const Float:cost[10] = {124.0, 59.0, 47.0, 259.0, 53.0, 273.0, 122.0, 254.0, 210.0, 83.0};
+    new Float:dx = floatabs(g_wayPoint[start][0] - g_wayPoint[end][0]);
+    new Float:dy = floatabs(g_wayPoint[start][1] - g_wayPoint[end][1]);
+    new Float:dz = floatabs(g_wayPoint[start][2] - g_wayPoint[end][2]);
 	
-	for (new i = 0; i < sizeof cost; i++)
-	{
-		heapInsert(i, heap, size, cost);
-	}
-	
-	heapRemoveMin(heap, size, cost);
-	heapRemoveMin(heap, size, cost);
-	heapRemoveMin(heap, size, cost);
-	
-	for (new i = 0; i < size; i++)
-	{
-		server_print("heap[%d] = %d, cost = %.f", i, heap[i], cost[heap[i]]);
-	}
-}
-
-stock heapGetMin(const heap[], size)
-{
-	if (size <= 0)
-		return NULL;
-	
-	return heap[0];
-}
-
-stock heapGetLeftChild(index)
-{
-	return 2 * index + 1;
-}
-
-stock heapGetRightChild(index)
-{
-	return 2 * index + 2;
-}
-
-stock heapGetParent(index)
-{
-	return (index - 1) / 2;
-}
-
-stock heapInsert(element, heap[], &size, const Float:cost[])
-{
-	size++;
-	heap[size-1] = element;
-	heapSiftUp(size-1, heap, cost);
-}
-
-stock heapSiftUp(index, heap[], const Float:cost[])
-{
-	new parent, tmp;
-	if (index != 0)
-	{
-		parent = heapGetParent(index);
-		if (cost[heap[parent]] > cost[heap[index]])
-		{
-			tmp = heap[parent];
-			heap[parent] = heap[index];
-			heap[index] = tmp;
-			heapSiftUp(index, heap, cost);
-		}
-	}
-}
-
-stock heapRemoveMin(heap[], &size, const Float:cost[])
-{
-	if (size > 0)
-	{
-		heap[0] = heap[size-1];
-		size--;
-		
-		if (size > 0)
-			heapSiftDown(0, heap, size, cost)
-	}
-}
-
-stock heapSiftDown(index, heap[], size, const Float:cost[])
-{
-	new left, right, min;
-	left = heapGetLeftChild(index);
-	right = heapGetRightChild(index);
-	
-	if (right >= size)
-	{
-		if (left >= size)
-			return;
-		else
-			min = left;
-	}
-	else
-	{
-		if (cost[heap[left]] <= cost[heap[right]])
-			min = left;
-		else
-			min = right;
-	}
-	
-	if (cost[heap[index]] > cost[heap[min]])
-	{
-		new tmp = heap[min];
-		heap[min] = heap[index];
-		heap[index] = tmp;
-		heapSiftDown(index, heap, size, cost)
-	}
+    return HEURISTIC * floatsqroot(dx * dx + dy * dy + dz * dz);
 }
 
 // Check whether a point is valid
@@ -1153,6 +1097,28 @@ stock getPointFlagsString(point, output[], maxLen)
 	{
 		output[len-1] = 0;
 	}
+}
+
+stock getCurrentPoint(Float:origin[3], Float:distance=9999999.0)
+{
+	new point = NULL;
+	new Float:minDist = distance;
+	new Float:dist;
+	
+	for (new i = 0; i < g_wayCount; i++)
+	{
+		if (!isReachable(origin, g_wayPoint[i], IGNORE_MONSTERS))
+			continue;
+		
+		dist = get_distance_f(origin, g_wayPoint[i]);
+		if (dist < minDist)
+		{
+			point = i;
+			minDist = dist;
+		}
+	}
+	
+	return point;
 }
 
 // Find the closest waypoint
@@ -1356,6 +1322,35 @@ stock bool:isReachable(Float:start[3], Float:end[3], noMonsters=IGNORE_MONSTERS,
 	return true;
 }
 
+stock Float:distPointSegment(Float:origin[3], Float:begin[3], Float:end[3], Float:output[3])
+{
+	new Float:v[3], Float:w[3];
+	xs_vec_sub(end, begin, v);
+	xs_vec_sub(origin, begin, w);
+	
+	new Float:c1 = xs_vec_dot(w, v);
+	if (c1 <= 0)
+	{
+		output = begin;
+		return get_distance_f(origin, begin);
+	}
+	
+	new Float:c2 = xs_vec_dot(v, v);
+	if (c2 <= c1)
+	{
+		output = end;
+		return get_distance_f(origin, end);
+	}
+	
+	new Float:b = c1 / c2;
+	new Float:pB[3];
+	xs_vec_mul_scalar(v, b, pB);
+	xs_vec_add(begin, pB, pB);
+	
+	output = pB;
+	return get_distance_f(origin, pB);
+}
+
 // Draw a line
 stock drawLine(id, Float:x1, Float:y1, Float:z1, Float:x2, Float:y2, Float:z2, 
 	sprite, frame=0, rate=0, life=10, width=10, noise=0, color[3]={255,255,255}, alpha=127, scroll=0)
@@ -1388,33 +1383,4 @@ stock drawLine2(id, Float:start[3], Float:end[3], sprite, frame=0, rate=0, life=
 {
 	drawLine(id, start[0], start[1], start[2], end[0], end[1], end[2],
 		sprite, frame, rate, life, width, noise, color, alpha, scroll);
-}
-
-stock Float:distPointSegment(Float:origin[3], Float:begin[3], Float:end[3], Float:output[3])
-{
-	new Float:v[3], Float:w[3];
-	xs_vec_sub(end, begin, v);
-	xs_vec_sub(origin, begin, w);
-	
-	new Float:c1 = xs_vec_dot(w, v);
-	if (c1 <= 0)
-	{
-		output = begin;
-		return get_distance_f(origin, begin);
-	}
-	
-	new Float:c2 = xs_vec_dot(v, v);
-	if (c2 <= c1)
-	{
-		output = end;
-		return get_distance_f(origin, end);
-	}
-	
-	new Float:b = c1 / c2;
-	new Float:pB[3];
-	xs_vec_mul_scalar(v, b, pB);
-	xs_vec_add(begin, pB, pB);
-	
-	output = pB;
-	return get_distance_f(origin, pB);
 }
