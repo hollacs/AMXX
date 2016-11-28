@@ -158,11 +158,10 @@ public ThinkNpc(npc)
 {
 	new Float:gameTime = get_gametime();
 	
+	new enemy = entity_get_entity(npc, EV_ENT_enemy);
+	
 	new Float:origin[3];
 	entity_get_vector(npc, EV_VEC_origin, origin);
-	
-	new enemy = entity_get_edict(npc, EV_ENT_enemy);
-	new oldEnemy = enemy;
 	
 	if (!is_user_alive(enemy))
 	{
@@ -170,114 +169,14 @@ public ThinkNpc(npc)
 	}
 	else if (gameTime >= entity_get_float(npc, EV_FL_LOCKTIME) + 15.0)
 	{
-		new player = findClosestPlayer(origin, 300.0);
-		if (is_user_alive(player))
-			enemy = player;
+		new enemy2 = findClosestPlayer(origin, 300.0);
+		if (is_user_alive(enemy2))
+			enemy = enemy2;
 	}
 	
 	if (is_user_alive(enemy))
 	{
-		new Float:origin2[3], Float:target[3];
-		entity_get_vector(enemy, EV_VEC_origin, origin2);
 		
-		if (gameTime >= entity_get_float(npc, EV_FL_PATHFIND_TIME) + 0.1)
-		{
-			new prev = entity_get_int(npc, EV_INT_PREV);
-			new next = entity_get_int(npc, EV_INT_NEXT);
-			new goal = wp_GetCurrentPoint(origin2);
-			
-			if (!wp_IsValid(prev) || !wp_IsValid(next))
-			{
-				new line[2], Float:pos[3];
-				getClosestPointBetweenPaths(origin, line, pos);
-				
-				if (line[0] != NULL && line[1] != NULL && goal != NULL)
-				{
-					new Array:path = wp_AStar(line[0], goal);
-					if (path != Invalid_Array)
-					{
-						new size = ArraySize(path);
-						if (size >= 2)
-						{
-							new current = ArrayGetCell(path, 1);
-							if (current != line[1])
-							{
-								ArrayInsertCellBefore(path, 0, line[1]);
-								size = ArraySize(path);
-							}
-						}
-						
-						if (size <= 2)
-						{
-							target = origin2;
-							prev = ArrayGetCell(path, 0);
-							next = (size == 1) ? prev : ArrayGetCell(path, 1);
-						}
-						else
-						{
-							prev = ArrayGetCell(path, 0);
-							next = ArrayGetCell(path, 1);
-							
-							wp_GetOrigin(next, pos);
-							if (get_distance_f(origin, pos) <= wp_GetRange(next))
-							{
-								prev = next;
-								next = ArrayGetCell(path, 2);
-							}
-						}
-					}
-				}
-			}
-			else
-			{
-				
-			}
-			
-			entity_set_vector(npc, EV_VEC_oldorigin, target);
-			entity_set_float(npc, EV_FL_PATHFIND_TIME, gameTime);
-		}
-		
-		entity_get_vector(npc, EV_VEC_oldorigin, target);
-		
-		if (target[0] != -9999999.0)
-		{
-			new Float:steering[3];
-			xs_vec_add(steering, seek(npc, target, 200.0), steering);
-			
-			new Float:avelocity[3];
-			entity_get_vector(npc, EV_VEC_avelocity, avelocity);
-			
-			truncate(steering, 50.0);
-			xs_vec_div_scalar(steering, 2.5, steering);
-			xs_vec_add(avelocity, steering, avelocity);
-			truncate(avelocity, 200.0);
-			
-			new Float:velocity[3];
-			entity_get_vector(npc, EV_VEC_velocity, velocity);
-			
-			velocity[0] = avelocity[0];
-			velocity[1] = avelocity[1];
-			
-			entity_set_vector(npc, EV_VEC_velocity, velocity);
-			entity_set_vector(npc, EV_VEC_avelocity, velocity);
-			
-			new Float:angles[3];
-			vector_to_angle(avelocity, angles);
-			angles[0] = 0.0;
-			entity_set_vector(npc, EV_VEC_angles, angles);
-			
-			engfunc(EngFunc_MoveToOrigin, npc, target, 0.5, MOVE_STRAFE);
-		}
-		
-		if (enemy != oldEnemy)
-		{
-			entity_set_edict(npc, EV_ENT_enemy, enemy);
-			entity_set_float(npc, EV_FL_LOCKTIME, gameTime);
-		}
-	}
-	else
-	{
-		entity_set_edict(npc, EV_ENT_enemy, 0);
 	}
 	
 	new Float:velocity[3];
@@ -288,7 +187,17 @@ public ThinkNpc(npc)
 	else
 		entity_set_int(npc, EV_INT_sequence, ANIM_IDLE);
 	
-	entity_set_float(npc, EV_FL_nextthink, gameTime + 0.05);
+	entity_set_float(npc, EV_FL_nextthink, gameTime + 0.1);
+}
+
+stock bool:isInWorld(Float:vector[3])
+{
+	if (floatabs(vector[0]) >= 999999.0 
+	||  floatabs(vector[1]) >= 999999.0 
+	||  floatabs(vector[2]) >= 999999.0)
+		return false;
+	
+	return true;
 }
 
 stock Float:getClosestPointBetweenPaths(Float:origin[3], path[2], Float:output[3], Float:distance=9999999.0)
@@ -330,6 +239,15 @@ stock Float:getClosestPointBetweenPaths(Float:origin[3], path[2], Float:output[3
 	}
 	
 	return minDist;
+}
+
+stock bool:isPathPassable(point1, point2, noMonsters=IGNORE_MONSTERS, skipEnt=0)
+{
+	new Float:start[3], Float:end[3];
+	wp_GetOrigin(point1, start);
+	wp_GetOrigin(point2, end);
+	
+	return isReachable(start, end, noMonsters, skipEnt);
 }
 
 stock Float:distPointPath(Float:origin[3], point1, point2, Float:output[3])
