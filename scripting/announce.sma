@@ -1,68 +1,57 @@
 #include <amxmodx>
-#include <amxmisc>
 
-new Array:g_announce;
-new g_announceCount;
-new g_announceId;
+new Array:g_messages;
+new Array:g_hasShown;
+new g_msgCount;
 
-new cvarDelayMin, cvarDelayMax;
+new cvar_delayMin, cvar_delayMax;
 
 public plugin_init()
 {
-	register_plugin("Announce", "0.1", "Colgate");
+	register_plugin("Announce", "0.1", "penguin");
+
+	register_srvcmd("announce_add", "CmdAddMessage");
+
+	cvar_delayMin = register_cvar("announce_delay_min", "20");
+	cvar_delayMax = register_cvar("announce_delay_max", "70");
 	
-	cvarDelayMin = register_cvar("announce_delay_min", "20.0");
-	cvarDelayMax = register_cvar("announce_delay_max", "70.0");
+	g_messages = ArrayCreate(192);
+	g_hasShown = ArrayCreate(1);
 	
-	g_announce = ArrayCreate(192);
-	readConfigs();
-	
-	g_announceId = random(g_announceCount);
-	set_task(random_float(get_pcvar_float(cvarDelayMin), get_pcvar_float(cvarDelayMax)), "Announce");
+	set_task(5.0, "FirstStart");
+}
+
+public FirstStart()
+{
+	set_task(random_float(get_pcvar_float(cvar_delayMin), get_pcvar_float(cvar_delayMax)), "Announce");
 }
 
 public Announce()
 {
-	if (g_announceId >= g_announceCount)
-		g_announceId = 0;
-	
 	new message[192];
-	ArrayGetString(g_announce, g_announceId, message, charsmax(message));
+	ArrayGetString(g_messages, g_msgIndex, message, charsmax(message));
 	
 	client_print_color(0, print_team_default, message);
-	g_announceId++;
+	g_msgIndex++;
 	
-	remove_task();
-	set_task(random_float(get_pcvar_float(cvarDelayMin), get_pcvar_float(cvarDelayMax)), "Announce");
+	set_task(random_float(get_pcvar_float(cvar_delayMin), get_pcvar_float(cvar_delayMax)), "Announce");
 }
 
-readConfigs()
+public CmdAddMessage()
 {
-	new filePath[100];
-	get_configsdir(filePath, charsmax(filePath));
-	add(filePath, charsmax(filePath), "/announce.ini");
+	new arg[192];
+	read_args(arg, charsmax(arg));
+	remove_quotes(arg);
 	
-	new file = fopen(filePath, "r");
-	if (file)
-	{
-		while(!feof(file))
-		{
-			static data[256];
-			fgets(file, data, charsmax(data));
-			
-			if (!data[0] || data[0] == 239 || data[0] == ';')
-				continue;
-			
-			trim(data);
-			
-			replace_all(data, charsmax(data), "^^1", "^1");
-			replace_all(data, charsmax(data), "^^3", "^3");
-			replace_all(data, charsmax(data), "^^4", "^4");
-			
-			ArrayPushString(g_announce, data);
-			g_announceCount++;
-		}
-		
-		fclose(file);
-	}
+	if (!arg[0])
+		return PLUGIN_HANDLED;
+	
+	replace_string(arg, charsmax(arg), "\x01", "^x01");
+	replace_string(arg, charsmax(arg), "\x03", "^x03");
+	replace_string(arg, charsmax(arg), "\x04", "^x04");
+	
+	ArrayPushString(g_messages, arg);
+	g_msgCount++;
+	
+	return PLUGIN_HANDLED;
 }

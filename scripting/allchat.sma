@@ -1,8 +1,10 @@
 #include <amxmodx>
+#include <fakemeta>
 
 #define VERSION "0.1"
+#define CSTRIKE_CHAT_ALL "%s1 :  %s2"
 
-new g_isFirstSay;
+new g_message[96];
 new g_msgSayText;
 
 public plugin_init()
@@ -18,33 +20,39 @@ public plugin_init()
 
 public CmdSay(id)
 {
-	g_isFirstSay = true;
+	read_argv(1, g_message, charsmax(g_message));
+	remove_quotes(g_message);
 }
 
 public MsgSayText(msgId, msgDest, id)
 {	
 	new string1[32];
 	get_msg_arg_string(2, string1, charsmax(string1));
-	
-	if (equal(string1, "#Cstrike_Chat", 13))
-	{
-		if (g_isFirstSay)
+
+	if (equal(string1, "#Cstrike_Chat", 13) || equal(string1, CSTRIKE_CHAT_ALL))
+	{	
+		new string3[192];
+		get_msg_arg_string(4, string3, charsmax(string3));
+		string3[strlen(string3) - 1] = 0;
+		
+		if (g_message[0] && equal(string3, g_message, 96))
 		{
 			new sender = get_msg_arg_int(1);
-			
-			new bool:isTeamMsg = bool:!equal(string1, "#Cstrike_Chat_All", 17);
 			new senderTeam = get_user_team(sender);
+			
+			new bool:isTeamMsg = bool:(!equal(string1, "#Cstrike_Chat_All", 17) && !equal(string1, CSTRIKE_CHAT_ALL));
 			new bool:isSenderSpec = bool:!(1 <= senderTeam <= 2);
 			
 			if (!(isSenderSpec && isTeamMsg))
 			{
-				new string2[128], string3[192];
+				new string2[128];
 				get_msg_arg_string(3, string2, charsmax(string2));
-				get_msg_arg_string(4, string3, charsmax(string3));
 				
 				new flags[5], teamName[10];
 				if (is_user_alive(sender))
+				{
 					flags = "bc";
+				}
 				else
 					flags = "ac";
 				
@@ -72,7 +80,7 @@ public MsgSayText(msgId, msgDest, id)
 				}
 			}
 			
-			g_isFirstSay = false;
+			g_message[0] = 0;
 		}
 	}
 }

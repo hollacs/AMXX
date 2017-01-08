@@ -40,8 +40,11 @@ public plugin_end()
 
 public client_putinserver(id)
 {
-	new address[32];
-	get_user_ip(id, address, charsmax(address), 1);
+	new address[40];
+	if (isAuthIdValid(address))
+		get_user_authid(id, address, charsmax(address));
+	else
+		get_user_ip(id, address, charsmax(address), 1);
 	
 	nvault_get(g_vault, address, g_nick[id], charsmax(g_nick[]));
 }
@@ -50,8 +53,11 @@ public client_disconnected(id)
 {
 	if (g_nick[id][0])
 	{
-		new address[32];
-		get_user_ip(id, address, charsmax(address), 1);
+		new address[40];
+		if (isAuthIdValid(address))
+			get_user_authid(id, address, charsmax(address));
+		else
+			get_user_ip(id, address, charsmax(address), 1);
 		
 		nvault_set(g_vault, address, g_nick[id]);
 	}
@@ -108,9 +114,7 @@ public CmdSay(id)
 				return PLUGIN_HANDLED;
 			}
 			
-			replace_all(nick, charsmax(nick), "%s", " s");
-			replace_all(nick, charsmax(nick), "%d", " d");
-			replace_all(nick, charsmax(nick), "%f", " f");
+			replace_string(nick, charsmax(nick), "%", " ");
 			
 			copy(g_nick[id], charsmax(g_nick[]), nick);
 			client_print(id, print_chat, "你的個人稱號設定為 ^"%s^"", g_nick[id]);
@@ -127,7 +131,7 @@ public MsgSayText(msgId, msgDest, id)
 	new string1[32];
 	get_msg_arg_string(2, string1, charsmax(string1));
 	
-	if (!equal(string1, "#Cstrike_Chat", 13) || !equal(string1, "#Cstrike_Chat_All", 17))
+	if (!equal(string1, "#Cstrike_Chat", 13))
 		return;
 	
 	if (g_format[0])
@@ -139,7 +143,7 @@ public MsgSayText(msgId, msgDest, id)
 	}
 }
 
-formatSay(id)
+stock formatSay(id)
 {
 	g_format[0] = 0;
 	
@@ -149,7 +153,7 @@ formatSay(id)
 		len = formatex(g_format, charsmax(g_format), "^4%a ", ArrayGetStringHandle(g_adminTag, index));
 	
 	if (g_nick[id][0])
-		len += formatex(g_format[len], 255-len, "^3[^1%s^3] ", g_nick[id]);
+		len += formatex(g_format[len], 255-len, "^1[^3%s^1] ", g_nick[id]);
 	
 	if (len > 0)
 	{
@@ -169,4 +173,17 @@ stock checkAdminFlags(id)
 	}
 	
 	return -1;
+}
+
+stock bool:isAuthIdValid(const authId[])
+{
+	if (equali(authId, "STEAM_ID_PENDING") ||
+		equali(authId, "STEAM_ID_LAN") ||
+		equali(authId, "HLTV") ||
+		equali(authId, "4294967295") ||
+		equali(authId, "VALVE_ID_LAN") ||
+		equali(authId, "VALVE_ID_PENDING"))
+		return false;
+	
+	return true
 }
