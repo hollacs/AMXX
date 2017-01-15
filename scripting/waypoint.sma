@@ -137,7 +137,7 @@ public HandleWaypointMenu(id, menu, item)
 			}
 			else
 			{
-				removePoint(point);
+				removeWaypoint(point);
 				client_print(0, print_chat, "* Remove waypoint #%d.", point);
 			}
 		}
@@ -216,6 +216,31 @@ stock createWaypoint(Float:origin[3], Float:range=0.0, flags=0)
 	
 	g_wayCount++;
 	return g_wayCount - 1;
+}
+
+stock removePoint(point)
+{
+	g_wayCount--;
+	g_wayPoint[point] = g_wayPoint[g_wayCount];
+	g_wayRange[point] = g_wayRange[g_wayCount];
+	g_wayFlags[point] = g_wayFlags[g_wayCount];
+	g_wayPaths[point] = g_wayPaths[g_wayCount];
+	g_wayPathFlags[point] = g_wayPathFlags[g_wayCount];
+	
+	for (new i = 0; i < g_wayCount; i++)
+	{
+		for (new j = 0; j < MAX_PATHS; j++)
+		{
+			if (g_wayPaths[i][j] == point)
+			{
+				g_wayPaths[i][j] = NULL;
+			}
+			else if (g_wayPaths[i][j] == g_wayCount)
+			{
+				g_wayPaths[i][j] = point;
+			}
+		}
+	}
 }
 
 stock bool:isWaypointValid(point)
