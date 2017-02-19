@@ -30,6 +30,7 @@ new g_nomination[33] = {NULL, ...};
 
 new g_voting;
 new Float:g_voteTime;
+new Float:g_originalTimeLimit;
 new g_menuChoices[9], g_numChoices;
 new g_voteCount[9];
 
@@ -41,9 +42,10 @@ new g_currentMapId;
 new g_maxClients;
 new g_hudSyncObj;
 
-new CvarWait, CvarRatio, CvarReady, CvarDuration, CvarChangeTime;
-new CvarExtendStep, CvarExtendMax;
-new CvarTimeLimit;
+new Float:CvarRtvWait, Float:CvarRtvRatio;
+new Float:CvarReady, Float:CvarDuration, Float:CvarChangeMapTime;
+new Float:CvarExtendStep, Float:CvarExtendMax;
+new Float:CvarTimeLimit;
 
 public plugin_precache()
 {
@@ -73,6 +75,7 @@ public plugin_precache()
 	get_localinfo("mm_nextmod", modPrefix, charsmax(modPrefix));
 	
 	g_currentMod = arrayFindString(g_modPrefix, modPrefix);
+	setNextMap("not yet voted on");
 }
 
 public plugin_init()
@@ -80,6 +83,7 @@ public plugin_init()
 	register_plugin("Mod Manager", VERSION, "penguinux");
 	
 	register_event("HLTV", "OnEventNewRound", "a", "1=0", "2=0");
+	register_event("30", "OnEventMapChange", "a");
 	
 	register_concmd("mm_startvote", "CmdStartVote", ADMIN_MAP);
 
@@ -89,22 +93,36 @@ public plugin_init()
 	register_menucmd(register_menuid("Vote Mod"), 1023, "CountModVote");
 	register_menucmd(register_menuid("Vote Map"), 1023, "CountMapVote");
 	
-	CvarWait = register_cvar("mm_rtv_wait", "120");
-	CvarRatio = register_cvar("mm_rtv_ratio", "0.7");
-	CvarReady = register_cvar("mm_vote_delay", "8.0");
-	CvarDuration = register_cvar("mm_vote_duration", "15.0");
-	CvarChangeTime = register_cvar("mm_change_time", "180.0");
+	new pCvar = create_cvar("mm_rtv_wait", "120");
+	bind_pcvar_float(pCvar, CvarRtvWait);
 	
-	CvarExtendStep = register_cvar("mm_extend_step", "15");
-	CvarExtendMax = register_cvar("mm_extend_max", "120");
-	
-	CvarTimeLimit = get_cvar_pointer("mp_timelimit");
+	pCvar = create_cvar("mm_rtv_ratio", "0.6");
+	bind_pcvar_float(pCvar, CvarRtvRatio);
 
+	pCvar = create_cvar("mm_vote_delay", "8.0");
+	bind_pcvar_float(pCvar, CvarReady);
+
+	pCvar = create_cvar("mm_vote_duration", "15.0");
+	bind_pcvar_float(pCvar, CvarDuration);
+
+	pCvar = create_cvar("mm_changemap_time", "180.0");
+	bind_pcvar_float(pCvar, CvarChangeMapTime);
+	
+	pCvar = create_cvar("mm_extend_step", "15");
+	bind_pcvar_float(pCvar, CvarExtendStep);
+
+	pCvar = create_cvar("mm_extend_max", "120");
+	bind_pcvar_float(pCvar, CvarExtendMax);
+	
+	pCvar = get_cvar_pointer("mp_timelimit");
+	bind_pcvar_float(pCvar, CvarTimeLimit);
+	
 	g_maxClients = get_maxplayers();
 	g_hudSyncObj = CreateHudSyncObj();
-	
-	set_task(10.0, "CheckEndOfMap", 1337, _, _, "b");
+	g_originalTimeLimit = CvarTimeLimit;
+	server_print("original time limit is %f", g_originalTimeLimit);
 
+	set_task(10.0, "CheckEndOfMap", 1337, _, _, "b");
 	CheckMod();
 }
 
@@ -138,8 +156,10 @@ CheckMod()
 		}
 		else
 		{
+			get_localinfo("mm_nextmod", modPrefix, charsmax(modPrefix));
 			set_localinfo("mm_nextmod", "Jjaio84aAKLJ921o0");
-			if (g_currentMod != NULL)
+			
+			if (g_currentMod != NULL || !modPrefix[0])
 				server_cmd("restart");
 		}
 	}
@@ -151,26 +171,29 @@ CheckMod()
 }
 
 public plugin_cfg()
-{
-	if (g_currentMod == NULL)
-		return;
-	
-	new basePath[100];
-	get_localinfo("amxx_configsdir", basePath, charsmax(basePath));
-	add(basePath, charsmax(basePath), "/modmanager");
-	
-	new Array:aConfigs = ArrayGetCell(g_modConfigs, g_currentMod);
-	if (aConfigs != Invalid_Array)
+{	
+	if (g_currentMod != NULL)
 	{
-		new path[64], filePath[100];
-		new size = ArraySize(aConfigs);
-
-		for (new i = 0; i < size; i++)
+		new basePath[100];
+		get_localinfo("amxx_configsdir", basePath, charsmax(basePath));
+		add(basePath, charsmax(basePath), "/modmanager");
+		
+		new Array:aConfigs = ArrayGetCell(g_modConfigs, g_currentMod);
+		if (aConfigs != Invalid_Array)
 		{
-			ArrayGetString(aConfigs, i, path, charsmax(path));
-			formatex(filePath, charsmax(filePath), "%s/%s", basePath, path);
-			if (file_exists(filePath))
-				server_cmd("exec ^"%s^"", filePath);
+			new path[64], filePath[100];
+			new size = ArraySize(aConfigs);
+
+			for (new i = 0; i < size; i++)
+			{
+				ArrayGetString(aConfigs, i, path, charsmax(path));
+				formatex(filePath, charsmax(filePath), "%s/%s", basePath, path);
+				if (file_exists(filePath))
+				{
+					server_cmd("exec ^"%s^"", filePath);
+					server_exec();
+				}
+			}
 		}
 	}
 }
@@ -207,7 +230,6 @@ public plugin_end()
 			if (file_exists(filePath))
 			{
 				AppendPluginsFile(pluginsFile, filePath);
-				server_print("%s %s", pluginsFile, filePath);
 			}
 		}
 	}
@@ -227,7 +249,7 @@ public CmdSayRtv(id)
 		return PLUGIN_HANDLED;
 	}
 
-	new Float:seconds = g_voteTime + get_pcvar_float(CvarWait) - get_gametime();
+	new Float:seconds = g_voteTime + CvarRtvWait - get_gametime();
 	if (seconds > 0.0)
 	{
 		client_print_color(id, print_team_default, "^4[HKGSE] ^1不能在 ^3%.f ^1秒內再投票.", seconds);
@@ -243,7 +265,7 @@ public CmdSayRtv(id)
 	
 	g_hasRtv[id] = true;
 
-	new numPlayers = floatround(countPlayers() * get_pcvar_float(CvarRatio), floatround_ceil) - countRtv();
+	new numPlayers = floatround(countPlayers() * CvarRtvRatio, floatround_ceil) - countRtv();
 	
 	client_print_color(0, id, "^4[HKGSE] ^3%n ^1話想轉地圖 (仲差 ^3%d ^1個人)", id, numPlayers);
 	
@@ -334,7 +356,7 @@ public ReadyToVote()
 {
 	if (g_voting == 1)
 	{
-		new second = floatround(g_voteTime + get_pcvar_float(CvarReady) - get_gametime());
+		new second = floatround(g_voteTime + CvarReady - get_gametime());
 		if (second > 0)
 		{
 			set_hudmessage(0, 255, 0, -1.0, 0.3, 0, 0.0, 1.0, 0.0, 1.0, -1);
@@ -347,7 +369,7 @@ public ReadyToVote()
 	}
 	else if (g_voting == 2)
 	{
-		new second = floatround(g_voteTime + get_pcvar_float(CvarDuration) + get_pcvar_float(CvarReady) * 2.0 - get_gametime());
+		new second = floatround(g_voteTime + CvarDuration + CvarReady * 2.0 - get_gametime());
 		if (second > 0)
 		{
 			set_hudmessage(0, 255, 0, -1.0, 0.3, 0, 0.0, 1.0, 0.0, 1.0, -1);
@@ -518,8 +540,8 @@ public CheckMapVotes()
 		
 		if (get_timeleft() < 130)
 		{
-			set_pcvar_float(CvarTimeLimit, get_pcvar_float(CvarTimeLimit) + get_pcvar_float(CvarExtendStep));
-			client_print_color(0, print_team_default, "^4[HKGSE] ^1投票地圖結束. %s 將會延長 %d 分鐘.", g_currentMap, get_pcvar_num(CvarExtendStep));
+			set_cvar_float("mp_timelimit", CvarTimeLimit + CvarExtendStep);
+			client_print_color(0, print_team_default, "^4[HKGSE] ^1投票地圖結束. %s 將會延長 %d 分鐘.", g_currentMap, CvarExtendStep);
 		}
 		else
 		{
@@ -533,8 +555,8 @@ public CheckMapVotes()
 		
 		g_voting = 3;
 
-		set_cvar_string("amx_nextmap", mapName);
-		set_task(get_pcvar_float(CvarChangeTime), "ChangeLevel", 0);
+		setNextMap(mapName);
+		set_task(CvarChangeMapTime, "ChangeLevel", 0);
 
 		client_print_color(0, print_team_default, "^4[HKGSE] ^1投票地圖結果是 ^3%s^1. 地圖將會在下一局轉換.", mapName);
 	}
@@ -555,6 +577,11 @@ public OnEventNewRound()
 {
 	if (g_voting == 3)
 		ChangeLevel();
+}
+
+public OnEventMapChange()
+{
+	set_cvar_float("mp_timelimit", g_originalTimeLimit);
 }
 
 public ChangeLevel()
@@ -761,7 +788,7 @@ StartModVote()
 
 	remove_task(0);
 	set_task(1.0, "ShowModVote", 0, _, _, "b");
-	set_task(get_pcvar_float(CvarDuration), "CheckModVotes", 0);
+	set_task(CvarDuration, "CheckModVotes", 0);
 	
 	client_cmd(0, "spk Gman/Gman_Choose%d", random_num(1, 2));
 }
@@ -832,7 +859,7 @@ StartMapVote()
 	ArrayDestroy(aNominations);
 	ArrayDestroy(aMaps);
 	
-	if (get_pcvar_float(CvarTimeLimit) < get_pcvar_float(CvarExtendMax) && isMapInMod(g_currentMap, g_nextMod))
+	if (CvarTimeLimit < CvarExtendMax && isMapInMod(g_currentMap, g_nextMod))
 		g_menuChoices[ID_EXTEND] = g_currentMapId;
 	else
 		g_menuChoices[ID_EXTEND] = NULL;
@@ -842,7 +869,7 @@ StartMapVote()
 
 	remove_task(0);
 	set_task(1.0, "ShowMapVote", 0, _, _, "b");
-	set_task(get_pcvar_float(CvarDuration), "CheckMapVotes", 0);
+	set_task(CvarDuration, "CheckMapVotes", 0);
 	
 	client_cmd(0, "spk Gman/Gman_Choose%d", random_num(1, 2));
 }
@@ -1075,8 +1102,6 @@ AppendPluginsFile(const pluginsFile[], const fileToCopy[])
 		fwrite_blocks(fp_write, buffer, readSize, BLOCK_CHAR);
 	}
 	
-	fwrite(fp_write, '^n', BLOCK_CHAR);
-	
 	fclose(fp_read);
 	fclose(fp_write);
 	return 1;
@@ -1103,6 +1128,16 @@ stock bool:isMapNominated(const mapName[])
 	}
 	
 	return false;
+}
+
+stock setNextMap(const mapName[])
+{
+	set_cvar_string("amx_nextmap", mapName);
+}
+
+stock getNextMap(output[], len)
+{
+	get_cvar_string("amx_nextmap", output, len);
 }
 
 stock setNextMod(mod)

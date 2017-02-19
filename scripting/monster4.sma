@@ -71,7 +71,7 @@ public CmdSayMonster(id)
 		set_pev(ent, PEV_NEXT, NULL);
 		set_pev(ent, PEV_PREV, NULL);
 		
-		set_pev(ent, pev_sequence, 4);
+		set_pev(ent, pev_sequence, 0);
 		set_pev(ent, pev_animtime, get_gametime());
 		set_pev(ent, pev_framerate, 1.0);
 		
