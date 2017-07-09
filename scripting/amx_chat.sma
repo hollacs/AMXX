@@ -30,7 +30,7 @@ public plugin_init()
 	g_adminTag = ArrayCreate(32);
 	g_adminFlags = ArrayCreate(1);
 	
-	g_vault = nvault_open("amx_chat");
+	g_vault = nvault_open("amx_chat_new");
 }
 
 public plugin_end()
@@ -41,12 +41,20 @@ public plugin_end()
 public client_putinserver(id)
 {
 	new address[40];
-	if (isAuthIdValid(address))
-		get_user_authid(id, address, charsmax(address));
-	else
+	get_user_authid(id, address, charsmax(address));
+	
+	if (!isAuthIdValid(address))
 		get_user_ip(id, address, charsmax(address), 1);
 	
-	nvault_get(g_vault, address, g_nick[id], charsmax(g_nick[]));
+	new data[32];
+	if (nvault_get(g_vault, address, data, charsmax(data)))
+	{
+		g_nick[id] = data;
+	}
+	else
+	{
+		copy(g_nick[id], charsmax(g_nick[]), "沒有稱號");
+	}
 }
 
 public client_disconnected(id)
@@ -54,9 +62,9 @@ public client_disconnected(id)
 	if (g_nick[id][0])
 	{
 		new address[40];
-		if (isAuthIdValid(address))
-			get_user_authid(id, address, charsmax(address));
-		else
+		get_user_authid(id, address, charsmax(address));
+		
+		if (!isAuthIdValid(address))
 			get_user_ip(id, address, charsmax(address), 1);
 		
 		nvault_set(g_vault, address, g_nick[id]);
@@ -99,7 +107,7 @@ public CmdSay(id)
 		{
 			if (g_nick[id][0] && !nick[0])
 			{
-				g_nick[id][0] = 0;
+				copy(g_nick[id], charsmax(g_nick[]), "沒有稱號");
 				client_print(id, print_chat, "你的個人稱號已重設");
 				return PLUGIN_HANDLED;
 			}
