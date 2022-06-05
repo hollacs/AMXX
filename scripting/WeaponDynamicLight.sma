@@ -45,11 +45,11 @@ public OnTraceAttack_Post(ent, attacker, Float:damage, Float:direction[3], tr, d
 	new Float:origin[3], Float:angles[3];
 	engfunc(EngFunc_GetAttachment, attacker, 1, origin, angles);
 	
-	message_begin_f(MSG_PVS, SVC_TEMPENTITY, origin);
+	engfunc(EngFunc_MessageBegin, MSG_PVS, SVC_TEMPENTITY, origin, 0);
 	write_byte(TE_DLIGHT);
-	write_coord_f(origin[0]); // x
-	write_coord_f(origin[1]); // y
-	write_coord_f(origin[2]); // z
+	engfunc(EngFunc_WriteCoord, origin[0]); // x
+	engfunc(EngFunc_WriteCoord, origin[1]); // y
+	engfunc(EngFunc_WriteCoord, origin[2]); // z
 	write_byte(random_num(10, 25)); // radius
 	write_byte(random_num(200, 255)); // r
 	write_byte(random_num(150, 220)); // g
