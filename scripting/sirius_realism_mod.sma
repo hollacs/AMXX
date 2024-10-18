@@ -15,6 +15,7 @@ new g_fRecoilUnit[33], Float:g_fRecoilTarget[33]
 new g_iStepPath[33], Float:g_fStepDelay[33]
 new g_WaveTime[33], Float:g_fSaveTarget[33]
 new Float:g_oldorigin[33]
+new Float:g_oldangle[33][3]
 
 new Float:g_oldplace[33][2], g_forcemove[33]
 
@@ -87,7 +88,8 @@ public client_connect(id)
 public client_disconnected(id)
 {
 	g_set_maxspeed[id] = false
-	client_cmd(id,"bind shift +speed")
+	//remove fucking slowhack
+	//client_cmd(id,"bind shift +speed")
 }
 
 public fw_TakeDamage(victim, inflictor, attacker, Float:damage, damage_type)
@@ -130,29 +132,41 @@ public fwd_CmdStart(id, uc_handle)
 	if(!is_user_alive(id) || !is_user_connected(id))
 		return
 
+	new Float:moveSpeed;
+	get_uc(uc_handle, UC_ForwardMove, moveSpeed)
+	if(!moveSpeed)
+    {
+		get_uc(uc_handle, UC_SideMove, moveSpeed)
+	}
+
+	new Float:maxSpeed;
+	pev(id, pev_maxspeed, maxSpeed)
+
+	new bool:holdingShiftKey = (0.0 < floatabs(moveSpeed) <= maxSpeed * 0.52)
+	if (holdingShiftKey)
+	{
+		set_pev(id, pev_maxspeed, 800.0)
+	}
+	else
+	{
+		ExecuteHamB(Ham_Item_PreFrame, id)
+	}
+
 	new Float:speed
 	speed = fm_get_walk_speed(id)
-	client_print(id, print_center,"speed: %.1f",speed)
+	
 	if(!(pev(id,pev_flags) & FL_ONGROUND))
 	{
 		g_fStepDelay[id] = get_gametime() + 0.45
 		return
 	}
 
-	if(speed < 1.0 && (g_fCrossAngles[id][0] != 0.0 || g_fCrossAngles[id][1] != 0.0))
-	{
-		g_WaveTime[id] = 0
-		ViewMoveTo(id,0.0,0.0,4)
-		return
-	}
 
-	new button, Float:oldbutton, frame = 10, Float:wave, Float:gametime, Float:crossangles[2]
+	new button, Float:angle[3], Float:oldbutton, frame = 10, Float:wave, Float:gametime, Float:crossangles[2]
 	button = get_uc(uc_handle, UC_Buttons);
-
 	
 	crossangles[0] = g_oldplace[id][0]
 	crossangles[1] = g_oldplace[id][1]
-
 	crossangles[0] -= speed / 20.0
 
 	if(button & IN_MOVERIGHT)
@@ -181,6 +195,20 @@ public fwd_CmdStart(id, uc_handle)
 			//oldbutton -= speed / 200.0
 		}
 	}
+
+	if(speed < 1.0 && (g_fCrossAngles[id][0] != 0.0 || g_fCrossAngles[id][1] != 0.0))
+	{
+		crossangles[0] = 0.0
+		crossangles[1] = 0.0
+		g_WaveTime[id] = 0
+	}
+
+	get_uc(uc_handle, UC_ViewAngles, angle)
+
+	crossangles[0] += AngleDiff(g_oldangle[id][0], angle[0])
+	crossangles[1] += AngleDiff(g_oldangle[id][1], angle[1])
+	g_oldangle[id] = angle
+
 	if(crossangles[0] > 25.0) crossangles[0] = 25.0
 	if(crossangles[0] < -25.0) crossangles[0] = -25.0
 	if(crossangles[1] > 25.0) crossangles[1] = 25.0
@@ -292,6 +320,15 @@ public fwd_PlayerPreThink(id)
 	}
 }
 
+stock Float:AngleDiff(Float:angle1, Float:angle2)
+{
+	new Float:diff = floatmod(angle2 - angle1, 360.0);
+	if (diff > 180.0)
+		diff -= 360.0;
+
+	return diff;
+}
+
 stock ViewMoveTo(id, Float:Pitch, Float:Yaw, frame, force = 0)
 {
 	if(g_forcemove[id])   return
@@ -341,4 +378,9 @@ stock Float:fm_get_air_speed(id)
  	vVelocity[1] = 0.0;
 
 	return vector_length(vVelocity);
+}
+
+stock Float:floatmod(Float:num, Float:denom)
+{
+	return num - denom * floatround(num / denom, floatround_floor)
 }
